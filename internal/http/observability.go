@@ -31,7 +31,7 @@ func ObservabilitySummary(deps *ObservabilityDeps) http.HandlerFunc {
 			naryo = map[string]any{"healthy": false, "message": "naryo client not configured"}
 		}
 
-		payments := summarizePayments(sessions, activity)
+		payments := summarizePayments(deps.Svc, sessions, activity)
 
 		payload := map[string]any{
 			"generatedAt": time.Now().UTC().Format(time.RFC3339Nano),
@@ -48,9 +48,10 @@ func ObservabilitySummary(deps *ObservabilityDeps) http.HandlerFunc {
 	}
 }
 
-func summarizePayments(sessions []pipeline.Session, activity []pipeline.ActivityEntry) map[string]any {
+func summarizePayments(svc *pipeline.Service, sessions []pipeline.Session, activity []pipeline.ActivityEntry) map[string]any {
 	var runningPaid, streamOn int
 	var estCents int64
+	prepaidByAgent := map[string]int64{}
 	for _, s := range sessions {
 		if s.State == pipeline.StateRunning {
 			runningPaid++
@@ -59,15 +60,22 @@ func summarizePayments(sessions []pipeline.Session, activity []pipeline.Activity
 			}
 			estCents += s.BilledSeconds * s.RateCentsPerSecond
 		}
+		if s.AgentID != "" && svc != nil {
+			prepaidByAgent[s.AgentID] = svc.PrepaidBalance(s.AgentID)
+		}
 	}
 	return map[string]any{
 		"x402": map[string]any{
 			"note": "Paid mutations use Coinbase x402 (PAYMENT-SIGNATURE). This summary infers state from sessions + activity only.",
 		},
+		"prepaid": map[string]any{
+			"note":              "Off-chain prepaid units per agent; top up via POST /v1/agents/{agentId}/topup/x402 or .../deposit.",
+			"balanceUnitsByAgent": prepaidByAgent,
+		},
 		"runningPipelines":       runningPaid,
 		"streamsActive":          streamOn,
 		"estimatedBilledCents":   estCents,
-		"recentPaymentEvents": countTypes(activity, []string{"payment_stream", "pipeline_created", "pipeline_started"}),
+		"recentPaymentEvents": countTypes(activity, []string{"payment_stream", "pipeline_created", "pipeline_started", "agent_top_up"}),
 	}
 }
 

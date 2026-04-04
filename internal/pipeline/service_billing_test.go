@@ -2,7 +2,11 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
+
+	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/ledger"
 )
 
 func TestBillingTickIncrementsPerSecondWindow(t *testing.T) {
@@ -93,3 +97,80 @@ func (mockNaryo) EnsurePipeline(ctx context.Context, sessionID string) (string, 
 func (mockNaryo) PauseEgress(ctx context.Context, sessionID string) error   { return nil }
 func (mockNaryo) ResumeEgress(ctx context.Context, sessionID string) error { return nil }
 func (mockNaryo) StopPipeline(ctx context.Context, sessionID string) error  { return nil }
+
+func TestPrepaidMinuteCharge(t *testing.T) {
+	ctx := context.Background()
+	tick := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return tick }
+
+	led := ledger.NewMemoryLedger()
+	if err := led.Credit("agent-1", 10_000, "", "seed"); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(NewMemoryStore(), &mockNaryo{}, nil, 1, nil,
+		WithPrepaidLedger(led),
+		WithRateUnitsPerMinute(60),
+		WithSummaryWindowMinutes(5),
+		WithClock(clock),
+	)
+	sess, err := svc.Create(ctx, "agent-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Start(ctx, sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	for range 59 {
+		svc.BillingTick(ctx)
+	}
+	bal, _ := led.GetBalance("agent-1")
+	if bal != 10_000 {
+		t.Fatalf("before minute rollover want 10000 got %d", bal)
+	}
+	tick = tick.Add(time.Minute)
+	svc.BillingTick(ctx)
+	bal, _ = led.GetBalance("agent-1")
+	if bal != 10_000-60 {
+		t.Fatalf("after one minute charge want %d got %d", 10_000-60, bal)
+	}
+}
+
+func TestPrepaidBillingSummaryWindow(t *testing.T) {
+	ctx := context.Background()
+	tick := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return tick }
+	h := &mockHCS{}
+	led := ledger.NewMemoryLedger()
+	_ = led.Credit("a1", 100_000, "", "seed")
+	svc := NewService(NewMemoryStore(), &mockNaryo{}, h, 1, nil,
+		WithPrepaidLedger(led),
+		WithRateUnitsPerMinute(10),
+		WithSummaryWindowMinutes(5),
+		WithClock(clock),
+	)
+	sess, _ := svc.Create(ctx, "a1")
+	_ = svc.Start(ctx, sess.ID)
+	// Anchor minute, then one charge per minute until summary window elapses (5m after first charge).
+	svc.BillingTick(ctx)
+	for i := 0; i < 7; i++ {
+		tick = tick.Add(time.Minute)
+		svc.BillingTick(ctx)
+	}
+	if h.summaries < 1 {
+		t.Fatalf("expected at least one billing_summary, got %d", h.summaries)
+	}
+}
+
+func TestStartRejectedWithoutBalance(t *testing.T) {
+	ctx := context.Background()
+	led := ledger.NewMemoryLedger()
+	svc := NewService(NewMemoryStore(), &mockNaryo{}, nil, 1, nil, WithPrepaidLedger(led))
+	sess, _ := svc.Create(ctx, "b1")
+	err := svc.Start(ctx, sess.ID)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, ErrInsufficientPrepaid) {
+		t.Fatalf("want ErrInsufficientPrepaid got %v", err)
+	}
+}

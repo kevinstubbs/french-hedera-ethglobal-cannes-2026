@@ -81,15 +81,23 @@ func NewPipelineServer(svc *pipeline.Service) *mcpsdk.Server {
 			st, body := mapPipelineErr(err)
 			return errToolResult(st, body, err)
 		}
-		return okToolResult(http.StatusOK, map[string]any{
-			"id":                  sess.ID,
-			"agentId":             sess.AgentID,
-			"state":               string(sess.State),
-			"billedSeconds":       sess.BilledSeconds,
-			"paymentStreamActive": sess.PaymentStreamActive,
-			"rateCentsPerSecond":  sess.RateCentsPerSecond,
-			"lastNaryoOpId":       sess.LastNaryoOpID,
-		})
+		out := map[string]any{
+			"id":                   sess.ID,
+			"agentId":              sess.AgentID,
+			"state":                string(sess.State),
+			"billedSeconds":        sess.BilledSeconds,
+			"paymentStreamActive":  sess.PaymentStreamActive,
+			"rateCentsPerSecond":   sess.RateCentsPerSecond,
+			"lastNaryoOpId":        sess.LastNaryoOpID,
+			"rateUnitsPerMinute":   sess.RateUnitsPerMinute,
+			"chargedUnits":         sess.ChargedUnits,
+			"summaryWindowMinutes": sess.SummaryWindowMinutes,
+			"autoPausedForFunds":   sess.AutoPausedForFunds,
+		}
+		if sess.AgentID != "" {
+			out["prepaidBalanceUnits"] = svc.PrepaidBalance(sess.AgentID)
+		}
+		return okToolResult(http.StatusOK, out)
 	})
 
 	return s
@@ -100,6 +108,8 @@ func mapPipelineErr(err error) (int, map[string]any) {
 	case errors.Is(err, pipeline.ErrNotFound):
 		return http.StatusNotFound, map[string]any{"error": "not found"}
 	case errors.Is(err, pipeline.ErrInvalidTransition):
+		return http.StatusConflict, map[string]any{"error": err.Error()}
+	case errors.Is(err, pipeline.ErrInsufficientPrepaid):
 		return http.StatusConflict, map[string]any{"error": err.Error()}
 	default:
 		return http.StatusBadRequest, map[string]any{"error": err.Error()}

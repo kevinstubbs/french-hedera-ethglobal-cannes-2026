@@ -33,6 +33,8 @@ func PipelineRoutes(cfg config.X402) x402http.RoutesConfig {
 		"POST /v1/pipelines/*/resume":             rc,
 		"PUT /v1/pipelines/*/reconfigure":         rc,
 		"PUT /v1/pipelines/*/payment-stream":      rc,
+		"POST /v1/agents/*/topup/x402":            rc,
+		"POST /v1/agents/*/topup/deposit":         rc,
 	}
 }
 

@@ -16,6 +16,8 @@ import (
 	hcslog "github.com/french-hedera-ethglobal-cannes2026/submission/internal/hcs"
 	httpapi "github.com/french-hedera-ethglobal-cannes2026/submission/internal/http"
 	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/http/middleware"
+	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/hedera"
+	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/ledger"
 	pipelinemcp "github.com/french-hedera-ethglobal-cannes2026/submission/internal/mcp"
 	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/naryo"
 	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/pipeline"
@@ -26,15 +28,31 @@ func main() {
 	defer stop()
 
 	xcfg := config.LoadX402FromEnv()
+	hedCfg := config.LoadHederaFromEnv()
 	facilitator := x402http.NewHTTPFacilitatorClient(&x402http.FacilitatorConfig{
 		URL: xcfg.FacilitatorURL,
 	})
 
 	store := pipeline.NewMemoryStore()
 	naryoClient := &naryo.MockClient{}
-	hcs := hcslog.NewLogger()
+	hedCli := hedera.NewClientFromConfig(hedCfg)
+
+	var hcsOpts []hcslog.LoggerOption
+	if hedCfg.AuditTopicID != "" && hedCfg.OperatorAccountID != "" && hedCfg.OperatorPrivateKey != "" {
+		hcsOpts = append(hcsOpts, hcslog.WithHCSTopic(hedCli, hedCfg.AuditTopicID))
+	}
+	hcs := hcslog.NewLogger(hcsOpts...)
 	activity := pipeline.NewActivityLog(256)
-	svc := pipeline.NewService(store, naryoClient, hcs, 1, activity)
+
+	led := ledger.NewMemoryLedger()
+	svcOpts := []pipeline.ServiceOption{
+		pipeline.WithPrepaidLedger(led),
+		pipeline.WithSummaryWindowMinutes(hedCfg.SummaryWindowMinutes),
+	}
+	if ru := config.PrepaidRateUnitsPerMinute(); ru > 0 {
+		svcOpts = append(svcOpts, pipeline.WithRateUnitsPerMinute(ru))
+	}
+	svc := pipeline.NewService(store, naryoClient, hcs, 1, activity, svcOpts...)
 
 	billingCtx, billingCancel := context.WithCancel(ctx)
 	defer billingCancel()
@@ -42,7 +60,7 @@ func main() {
 		svc.BillingTick(billingCtx)
 	})
 
-	api := &httpapi.API{Svc: svc}
+	api := &httpapi.API{Svc: svc, HederaClient: hedCli, HederaCfg: hedCfg}
 	mux := httpapi.NewMux(api)
 	guarded := middleware.PaymentGate(xcfg, facilitator, true)(mux)
 
@@ -66,7 +84,7 @@ func main() {
 	}
 
 	go func() {
-		slog.Info("listening", "addr", addr, "mcp_path", "/mcp")
+		slog.Info("listening", "addr", addr, "mcp_path", "/mcp", "hedera_audit_topic", hedCfg.AuditTopicID != "")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("server", "err", err)
 			os.Exit(1)

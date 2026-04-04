@@ -17,6 +17,9 @@ const (
 	EventPipelineStopped      = "pipeline_stopped"
 	EventPipelineReconfigured = "pipeline_reconfigured"
 	EventBillingTick             = "billing_tick"
+	EventBillingSummary          = "billing_summary"
+	EventAgentTopUp              = "agent_top_up"
+	EventStartRejectedInsufficient = "start_rejected_insufficient_prepaid"
 	EventPaymentStreamStarted    = "payment_stream_started"
 	EventPaymentStreamStalled    = "payment_stream_stalled"
 	EventPaymentStreamTerminated = "payment_stream_terminated"
@@ -39,6 +42,7 @@ type PayloadPipelineCreated struct {
 }
 
 type PayloadPipelineStarted struct {
+	AgentID   string `json:"agentId,omitempty"`
 	NaryoOpID string `json:"naryoOpId"`
 }
 
@@ -49,6 +53,36 @@ type PayloadPipelineReconfigured struct {
 type PayloadBillingTick struct {
 	BilledSeconds      int64 `json:"billedSeconds"`
 	RateCentsPerSecond int64 `json:"rateCentsPerSecond"`
+}
+
+// PayloadBillingSummary batches per-minute charges for HCS audit.
+type PayloadBillingSummary struct {
+	PipelineID            string `json:"pipelineId"`
+	AgentID               string `json:"agentId"`
+	RuntimeSeconds        int64  `json:"runtimeSeconds"`
+	AmountChargedUnits    int64  `json:"amountChargedUnits"`
+	RemainingBalanceUnits int64  `json:"remainingBalanceUnits"`
+	SummaryWindowMinutes  int64  `json:"summaryWindowMinutes"`
+	ConfigHash            string `json:"configHash,omitempty"`
+}
+
+type PayloadAgentTopUp struct {
+	AgentID      string `json:"agentId"`
+	AmountUnits  int64  `json:"amountUnits"`
+	Source       string `json:"source"`
+	SourceTxID   string `json:"sourceTxId,omitempty"`
+	Asset        string `json:"asset,omitempty"`
+}
+
+type PayloadStartRejectedInsufficient struct {
+	AgentID               string `json:"agentId"`
+	RequiredUnits         int64  `json:"requiredUnits"`
+	RemainingBalanceUnits int64  `json:"remainingBalanceUnits"`
+}
+
+type PayloadPipelinePaused struct {
+	Reason                string `json:"reason,omitempty"`
+	RemainingBalanceUnits int64  `json:"remainingBalanceUnits,omitempty"`
 }
 
 // PayloadPaymentStream* use empty JSON objects {} when there is no extra data.

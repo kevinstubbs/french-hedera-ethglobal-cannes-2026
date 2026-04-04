@@ -3,14 +3,20 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 
+	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/config"
+	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/hedera"
 	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/pipeline"
 )
 
 // API serves pipeline HTTP handlers.
 type API struct {
 	Svc *pipeline.Service
+	// Hedera optional: top-up verification (deposit path).
+	HederaClient hedera.Client
+	HederaCfg    config.Hedera
 }
 
 type createBody struct {
@@ -55,6 +61,11 @@ func (a *API) CreatePipeline(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	if u := config.PrepaidDevAutoCreditUnits(); u > 0 && body.AgentID != "" {
+		_ = a.Svc.CreditTopUp(r.Context(), pipeline.AgentTopUpArgs{
+			AgentID: body.AgentID, AmountUnits: u, Source: "dev_auto", SourceTxID: "",
+		})
+	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id":    sess.ID,
 		"state": string(sess.State),
@@ -73,7 +84,7 @@ func (a *API) GetStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"id":                  sess.ID,
 		"agentId":             sess.AgentID,
 		"state":               string(sess.State),
@@ -81,7 +92,15 @@ func (a *API) GetStatus(w http.ResponseWriter, r *http.Request) {
 		"paymentStreamActive": sess.PaymentStreamActive,
 		"rateCentsPerSecond":  sess.RateCentsPerSecond,
 		"lastNaryoOpId":       sess.LastNaryoOpID,
-	})
+		"rateUnitsPerMinute":  sess.RateUnitsPerMinute,
+		"chargedUnits":        sess.ChargedUnits,
+		"summaryWindowMinutes": sess.SummaryWindowMinutes,
+		"autoPausedForFunds":  sess.AutoPausedForFunds,
+	}
+	if sess.AgentID != "" {
+		out["prepaidBalanceUnits"] = a.Svc.PrepaidBalance(sess.AgentID)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // Start handles POST /v1/pipelines/{id}/start
@@ -155,11 +174,100 @@ func (a *API) PaymentStream(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"active": body.Active})
 }
 
+type topUpX402Body struct {
+	AmountUnits      int64  `json:"amountUnits"`
+	IdempotencyKey   string `json:"idempotencyKey"`
+}
+
+// TopUpX402 handles POST /v1/agents/{agentId}/topup/x402 (payment-gated). Credits prepaid after x402 succeeds.
+func (a *API) TopUpX402(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("agentId")
+	var body topUpX402Body
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if agentID == "" || body.AmountUnits <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid agentId or amountUnits"})
+		return
+	}
+	ref := body.IdempotencyKey
+	if ref == "" {
+		ref = r.Header.Get("X-Idempotency-Key")
+	}
+	err := a.Svc.CreditTopUp(r.Context(), pipeline.AgentTopUpArgs{
+		AgentID: agentID, AmountUnits: body.AmountUnits, Source: "x402", SourceTxID: ref,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"agentId": agentID, "creditedUnits": body.AmountUnits, "source": "x402",
+	})
+}
+
+type topUpDepositBody struct {
+	TransactionID string `json:"transactionId"`
+	AmountUnits   int64  `json:"amountUnits,omitempty"`
+}
+
+// TopUpDeposit handles POST /v1/agents/{agentId}/topup/deposit — verifies Hedera transfer then credits.
+func (a *API) TopUpDeposit(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("agentId")
+	var body topUpDepositBody
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if agentID == "" || body.TransactionID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid agentId or transactionId"})
+		return
+	}
+	var amount int64
+	var asset string
+	var err error
+	if a.HederaCfg.SkipTopupVerify {
+		amount = body.AmountUnits
+		if amount <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "amountUnits required when HEDERA_SKIP_TOPUP_VERIFY is set"})
+			return
+		}
+		asset = "unspecified"
+	} else if a.HederaClient != nil {
+		amount, asset, err = a.HederaClient.VerifyTopupTx(
+			r.Context(),
+			body.TransactionID,
+			a.HederaCfg.ServiceAccountID,
+			agentID,
+		)
+		if err != nil {
+			slog.Warn("topup deposit verify failed", "err", err)
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	} else {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "hedera client not configured"})
+		return
+	}
+
+	err = a.Svc.CreditTopUp(r.Context(), pipeline.AgentTopUpArgs{
+		AgentID: agentID, AmountUnits: amount, Source: "hedera_deposit", SourceTxID: body.TransactionID, Asset: asset,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"agentId": agentID, "creditedUnits": amount, "asset": asset, "transactionId": body.TransactionID,
+	})
+}
+
 func writeErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, pipeline.ErrNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	case errors.Is(err, pipeline.ErrInvalidTransition):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+	case errors.Is(err, pipeline.ErrInsufficientPrepaid):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})

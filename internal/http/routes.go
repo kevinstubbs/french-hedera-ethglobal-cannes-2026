@@ -16,5 +16,7 @@ func NewMux(api *API) *http.ServeMux {
 	m.HandleFunc("POST /v1/pipelines/{id}/resume", api.Resume)
 	m.HandleFunc("PUT /v1/pipelines/{id}/reconfigure", api.Reconfigure)
 	m.HandleFunc("PUT /v1/pipelines/{id}/payment-stream", api.PaymentStream)
+	m.HandleFunc("POST /v1/agents/{agentId}/topup/x402", api.TopUpX402)
+	m.HandleFunc("POST /v1/agents/{agentId}/topup/deposit", api.TopUpDeposit)
 	return m
 }

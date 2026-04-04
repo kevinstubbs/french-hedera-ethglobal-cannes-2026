@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"time"
+
+	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/pipeline"
 )
 
 // Clock supplies time for envelopes (tests use a fixed clock).
@@ -18,8 +20,11 @@ func (systemClock) Now() time.Time { return time.Now().UTC() }
 
 // Logger emits one JSON line per event using [Envelope].
 type Logger struct {
-	log   *slog.Logger
-	clock Clock
+	log            *slog.Logger
+	clock          Clock
+	topicSubmitter TopicSubmitter
+	topicID        string
+	hcsQueue       chan []byte
 }
 
 // LoggerOption configures [NewLogger].
@@ -43,6 +48,18 @@ func WithSlog(log *slog.Logger) LoggerOption {
 	}
 }
 
+// WithHCSTopic enables async best-effort submit of each envelope JSON to an HCS topic.
+func WithHCSTopic(sub TopicSubmitter, topicID string) LoggerOption {
+	return func(l *Logger) {
+		if sub == nil || topicID == "" {
+			return
+		}
+		l.topicSubmitter = sub
+		l.topicID = topicID
+		l.hcsQueue = make(chan []byte, 256)
+	}
+}
+
 // NewLogger builds an HCS JSON-line logger.
 func NewLogger(opts ...LoggerOption) *Logger {
 	l := &Logger{
@@ -51,6 +68,9 @@ func NewLogger(opts ...LoggerOption) *Logger {
 	}
 	for _, o := range opts {
 		o(l)
+	}
+	if l.hcsQueue != nil && l.topicSubmitter != nil {
+		go l.hcsSubmitLoop()
 	}
 	return l
 }
@@ -65,6 +85,7 @@ func (l *Logger) emit(ctx context.Context, env Envelope) {
 		return
 	}
 	l.log.InfoContext(ctx, string(b))
+	l.enqueueHCSPayload(b)
 }
 
 func (l *Logger) envelope(eventType, sessionID string, payload json.RawMessage) Envelope {
@@ -96,11 +117,11 @@ func (l *Logger) PipelineCreated(ctx context.Context, sessionID, agentID string)
 }
 
 // PipelineStarted emits pipeline_started.
-func (l *Logger) PipelineStarted(ctx context.Context, sessionID, naryoOpID string) {
+func (l *Logger) PipelineStarted(ctx context.Context, sessionID, agentID, naryoOpID string) {
 	if l == nil {
 		return
 	}
-	p, err := MarshalPayload(PayloadPipelineStarted{NaryoOpID: naryoOpID})
+	p, err := MarshalPayload(PayloadPipelineStarted{AgentID: agentID, NaryoOpID: naryoOpID})
 	if err != nil {
 		slog.Error("hcs: payload", "err", err)
 		return
@@ -111,11 +132,20 @@ func (l *Logger) PipelineStarted(ctx context.Context, sessionID, naryoOpID strin
 var emptyPayload = json.RawMessage(`{}`)
 
 // PipelinePaused emits pipeline_paused.
-func (l *Logger) PipelinePaused(ctx context.Context, sessionID string) {
+func (l *Logger) PipelinePaused(ctx context.Context, sessionID, reason string, remainingBalanceUnits int64) {
 	if l == nil {
 		return
 	}
-	l.emit(ctx, l.envelope(EventPipelinePaused, sessionID, emptyPayload))
+	if reason == "" && remainingBalanceUnits == 0 {
+		l.emit(ctx, l.envelope(EventPipelinePaused, sessionID, emptyPayload))
+		return
+	}
+	p, err := MarshalPayload(PayloadPipelinePaused{Reason: reason, RemainingBalanceUnits: remainingBalanceUnits})
+	if err != nil {
+		slog.Error("hcs: payload", "err", err)
+		return
+	}
+	l.emit(ctx, l.envelope(EventPipelinePaused, sessionID, p))
 }
 
 // PipelineResumed emits pipeline_resumed.
@@ -185,4 +215,61 @@ func (l *Logger) PaymentStreamTerminated(ctx context.Context, sessionID string) 
 		return
 	}
 	l.emit(ctx, l.envelope(EventPaymentStreamTerminated, sessionID, emptyPayload))
+}
+
+// BillingSummary emits billing_summary.
+func (l *Logger) BillingSummary(ctx context.Context, sessionID string, args pipeline.BillingSummaryArgs) {
+	if l == nil {
+		return
+	}
+	p, err := MarshalPayload(PayloadBillingSummary{
+		PipelineID:            sessionID,
+		AgentID:               args.AgentID,
+		RuntimeSeconds:        args.RuntimeSeconds,
+		AmountChargedUnits:    args.AmountChargedUnits,
+		RemainingBalanceUnits: args.RemainingBalanceUnits,
+		SummaryWindowMinutes:  args.SummaryWindowMinutes,
+		ConfigHash:            args.ConfigHash,
+	})
+	if err != nil {
+		slog.Error("hcs: payload", "err", err)
+		return
+	}
+	l.emit(ctx, l.envelope(EventBillingSummary, sessionID, p))
+}
+
+// AgentTopUp emits agent_top_up (sessionId empty at envelope level).
+func (l *Logger) AgentTopUp(ctx context.Context, args pipeline.AgentTopUpArgs) {
+	if l == nil {
+		return
+	}
+	p, err := MarshalPayload(PayloadAgentTopUp{
+		AgentID:     args.AgentID,
+		AmountUnits: args.AmountUnits,
+		Source:      args.Source,
+		SourceTxID:  args.SourceTxID,
+		Asset:       args.Asset,
+	})
+	if err != nil {
+		slog.Error("hcs: payload", "err", err)
+		return
+	}
+	l.emit(ctx, l.envelope(EventAgentTopUp, "", p))
+}
+
+// StartRejectedInsufficientPrepaid emits start_rejected_insufficient_prepaid.
+func (l *Logger) StartRejectedInsufficientPrepaid(ctx context.Context, sessionID, agentID string, requiredUnits, remainingUnits int64) {
+	if l == nil {
+		return
+	}
+	p, err := MarshalPayload(PayloadStartRejectedInsufficient{
+		AgentID:               agentID,
+		RequiredUnits:         requiredUnits,
+		RemainingBalanceUnits: remainingUnits,
+	})
+	if err != nil {
+		slog.Error("hcs: payload", "err", err)
+		return
+	}
+	l.emit(ctx, l.envelope(EventStartRejectedInsufficient, sessionID, p))
 }
