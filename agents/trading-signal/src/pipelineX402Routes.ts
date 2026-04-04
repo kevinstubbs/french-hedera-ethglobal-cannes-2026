@@ -1,19 +1,9 @@
 /**
  * Payment-gated route templates for the Go control plane.
  * Keep in sync with middleware.PipelineRoutes in internal/http/middleware/x402.go
- * (keys use a single "*" path segment wildcard).
+ * (keys use a single "*" path segment wildcard). GET .../status is prepaid-only on the API, not x402.
  */
-export const PIPELINE_X402_ROUTE_KEYS = [
-  "POST /v1/pipelines",
-  "POST /v1/pipelines/*/start",
-  "POST /v1/pipelines/*/stop",
-  "POST /v1/pipelines/*/pause",
-  "POST /v1/pipelines/*/resume",
-  "PUT /v1/pipelines/*/reconfigure",
-  "PUT /v1/pipelines/*/payment-stream",
-  "POST /v1/agents/*/topup/x402",
-  "POST /v1/agents/*/topup/deposit",
-] as const;
+export const PIPELINE_X402_ROUTE_KEYS = ["POST /v1/pipelines/*/start"] as const;
 
 export type PipelineX402RouteKey = (typeof PIPELINE_X402_ROUTE_KEYS)[number];
 

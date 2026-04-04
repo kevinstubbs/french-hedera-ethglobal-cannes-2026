@@ -5,13 +5,16 @@ import {
   mockPipelineDetailSess8f2a1c,
   mockSummaryLoaded,
 } from "@/lib/mockSummary";
+import { mockTelemetryChartRows } from "@/lib/mockTelemetry";
 import type { PipelineDetailResponse, Summary } from "@/lib/types";
+import type { TelemetryChartRow } from "@/lib/telemetryFromSummary";
 
 function HomePagePreview(props: {
   loading: boolean;
   err: string | null;
   data: Summary | null;
   initialSelectedPipelineId?: string | null;
+  telemetryRows?: TelemetryChartRow[];
 }) {
   const [tab, setTab] = useState<MainTab>("observability");
   const [selectedId, setSelectedId] = useState<string | null>(
@@ -37,6 +40,9 @@ function HomePagePreview(props: {
       recentNaryoEvents: [],
     };
   }, [selectedId, props.data]);
+  const telemetryRows =
+    props.telemetryRows ??
+    (props.data ? mockTelemetryChartRows : []);
   return (
     <div className="relative min-h-screen overflow-hidden">
       <div
@@ -62,6 +68,7 @@ function HomePagePreview(props: {
           pipelineDetail={pipelineDetail}
           pipelineDetailLoading={false}
           pipelineDetailErr={null}
+          telemetryRows={telemetryRows}
         />
       </div>
     </div>

@@ -8,7 +8,7 @@ import (
 )
 
 func TestPostNaryoEventUnauthorized(t *testing.T) {
-	ts, _, _, _ := newTestStackWith(t, stackConfig{})
+	ts, _, _, _, _ := newTestStackWith(t, stackConfig{})
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/internal/naryo/v1/events", strings.NewReader(`{"sessionId":"x","eventId":"e"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -25,7 +25,7 @@ func TestPostNaryoEventUnauthorized(t *testing.T) {
 }
 
 func TestPostNaryoEventBadJSON(t *testing.T) {
-	ts, _, _, _ := newTestStackWith(t, stackConfig{})
+	ts, _, _, _, _ := newTestStackWith(t, stackConfig{})
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/internal/naryo/v1/events", strings.NewReader(`not json`))
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +43,7 @@ func TestPostNaryoEventBadJSON(t *testing.T) {
 }
 
 func TestPostNaryoEventMissingFields(t *testing.T) {
-	ts, _, _, _ := newTestStackWith(t, stackConfig{})
+	ts, _, _, _, _ := newTestStackWith(t, stackConfig{})
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/internal/naryo/v1/events", strings.NewReader(`{"sessionId":"only"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +62,7 @@ func TestPostNaryoEventMissingFields(t *testing.T) {
 }
 
 func TestPostNaryoEventUnknownSession(t *testing.T) {
-	ts, _, _, _ := newTestStackWith(t, stackConfig{})
+	ts, _, _, _, _ := newTestStackWith(t, stackConfig{})
 	body := `{"sessionId":"does-not-exist","eventId":"e1","payload":{}}`
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/internal/naryo/v1/events", strings.NewReader(body))
 	if err != nil {

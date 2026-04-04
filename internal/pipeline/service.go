@@ -43,6 +43,8 @@ type Service struct {
 
 	ledger               PrepaidLedger
 	rateUnitsPerMinute   int64
+	debitIntervalSeconds int64
+	minStartMinutes      int64
 	summaryWindowMinutes int64
 	now                  func() time.Time
 }
@@ -57,10 +59,24 @@ func WithPrepaidLedger(l PrepaidLedger) ServiceOption {
 	}
 }
 
-// WithRateUnitsPerMinute sets units charged per wall-clock minute while running (default 60).
+// WithRateUnitsPerMinute sets prepaid units debited per wall-clock minute while running (default 1).
 func WithRateUnitsPerMinute(n int64) ServiceOption {
 	return func(s *Service) {
 		s.rateUnitsPerMinute = n
+	}
+}
+
+// WithDebitIntervalSeconds sets how often accumulated runtime is debited from prepaid (default 300).
+func WithDebitIntervalSeconds(n int64) ServiceOption {
+	return func(s *Service) {
+		s.debitIntervalSeconds = n
+	}
+}
+
+// WithMinStartMinutes sets minimum prepaid runway (in minutes at the per-minute rate) for start/resume (default 10).
+func WithMinStartMinutes(n int64) ServiceOption {
+	return func(s *Service) {
+		s.minStartMinutes = n
 	}
 }
 
@@ -90,7 +106,9 @@ func NewService(store *MemoryStore, client naryo.Client, log HCSLogger, rateCent
 		hcs:                  log,
 		activity:             activity,
 		rate:                 rateCentsPerSecond,
-		rateUnitsPerMinute:   60,
+		rateUnitsPerMinute:   1,
+		debitIntervalSeconds: 300,
+		minStartMinutes:      10,
 		summaryWindowMinutes: 10,
 		now:                  time.Now,
 	}
@@ -99,7 +117,13 @@ func NewService(store *MemoryStore, client naryo.Client, log HCSLogger, rateCent
 	}
 	s.summaryWindowMinutes = clampSummaryWin(s.summaryWindowMinutes)
 	if s.rateUnitsPerMinute <= 0 {
-		s.rateUnitsPerMinute = 60
+		s.rateUnitsPerMinute = 1
+	}
+	if s.debitIntervalSeconds <= 0 {
+		s.debitIntervalSeconds = 300
+	}
+	if s.minStartMinutes <= 0 {
+		s.minStartMinutes = 10
 	}
 	return s
 }
@@ -142,6 +166,25 @@ func (s *Service) PrepaidBalance(agentID string) int64 {
 	return b
 }
 
+// CheckStatusPrepaid returns [ErrInsufficientPrepaid] when GET .../status is not allowed: with a ledger,
+// running or paused sessions require the agent to have at least one prepaid unit (balance > 0).
+func (s *Service) CheckStatusPrepaid(sess Session) error {
+	if s == nil || s.ledger == nil || sess.AgentID == "" {
+		return nil
+	}
+	if sess.State != StateRunning && sess.State != StatePaused {
+		return nil
+	}
+	bal, err := s.ledger.GetBalance(sess.AgentID)
+	if err != nil {
+		return err
+	}
+	if bal <= 0 {
+		return &InsufficientPrepaidError{RemainingUnits: bal, RequiredUnits: 1}
+	}
+	return nil
+}
+
 // CreditTopUp credits prepaid balance and emits HCS (best-effort).
 func (s *Service) CreditTopUp(ctx context.Context, args AgentTopUpArgs) error {
 	if s == nil || s.ledger == nil {
@@ -162,33 +205,45 @@ func (s *Service) CreditTopUp(ctx context.Context, args AgentTopUpArgs) error {
 	return nil
 }
 
+func (s *Service) prepaidMinUnits() int64 {
+	rate := s.rateUnitsPerMinute
+	if rate <= 0 {
+		rate = 1
+	}
+	mins := s.minStartMinutes
+	if mins <= 0 {
+		mins = 10
+	}
+	return rate * mins
+}
+
 func (s *Service) checkPrepaid(agentID string) error {
 	if s.ledger == nil || agentID == "" {
 		return nil
 	}
-	min := s.rateUnitsPerMinute
-	if min <= 0 {
-		min = 60
-	}
+	min := s.prepaidMinUnits()
 	ok, bal, err := s.ledger.CanAfford(agentID, min)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		return fmt.Errorf("%w: have %d need %d", ErrInsufficientPrepaid, bal, min)
+		return &InsufficientPrepaidError{RemainingUnits: bal, RequiredUnits: min}
 	}
 	return nil
 }
 
 // Create registers a new session in created state.
 func (s *Service) Create(ctx context.Context, agentID string) (*Session, error) {
+	if err := s.checkPrepaid(agentID); err != nil {
+		return nil, err
+	}
 	id, err := newSessionID()
 	if err != nil {
 		return nil, err
 	}
 	rum := s.rateUnitsPerMinute
 	if rum <= 0 {
-		rum = 60
+		rum = 1
 	}
 	swin := s.summaryWindowMinutes
 	if swin <= 0 {
@@ -223,11 +278,7 @@ func (s *Service) Start(ctx context.Context, id string) error {
 			if s.ledger != nil {
 				rem, _ = s.ledger.GetBalance(sess.AgentID)
 			}
-			min := s.rateUnitsPerMinute
-			if min <= 0 {
-				min = 60
-			}
-			s.hcs.StartRejectedInsufficientPrepaid(ctx, id, sess.AgentID, min, rem)
+			s.hcs.StartRejectedInsufficientPrepaid(ctx, id, sess.AgentID, s.prepaidMinUnits(), rem)
 		}
 		return err
 	}
@@ -247,9 +298,11 @@ func (s *Service) Start(ctx context.Context, id string) error {
 		v.State = StateRunning
 		v.PaymentStreamActive = true
 		v.LastNaryoOpID = op
-		v.LastPaidMinute = 0
+		v.BillingNumerator = 0
+		v.SecondsInDebitWindow = 0
+		v.CommittedDebitSeq = 0
 		v.FundsChargeRetryPending = false
-		v.FundsRetryAtMinute = 0
+		v.FundsRetryAtUnix = 0
 		v.AutoPausedForFunds = false
 		return true, nil
 	})
@@ -331,11 +384,7 @@ func (s *Service) Resume(ctx context.Context, id string) error {
 			if s.ledger != nil {
 				rem, _ = s.ledger.GetBalance(sess.AgentID)
 			}
-			min := s.rateUnitsPerMinute
-			if min <= 0 {
-				min = 60
-			}
-			s.hcs.StartRejectedInsufficientPrepaid(ctx, id, sess.AgentID, min, rem)
+			s.hcs.StartRejectedInsufficientPrepaid(ctx, id, sess.AgentID, s.prepaidMinUnits(), rem)
 		}
 		return err
 	}
@@ -351,7 +400,7 @@ func (s *Service) Resume(ctx context.Context, id string) error {
 		v.State = StateRunning
 		v.PaymentStreamActive = true
 		v.FundsChargeRetryPending = false
-		v.FundsRetryAtMinute = 0
+		v.FundsRetryAtUnix = 0
 		v.AutoPausedForFunds = false
 		return true, nil
 	})
@@ -478,20 +527,25 @@ func (s *Service) BillingTick(ctx context.Context) {
 	s.runBillingTick(ctx)
 }
 
-// runBillingTick increments billed seconds; charges prepaid once per minute; emits batched HCS summaries.
+// runBillingTick increments billed seconds; accrues prepaid debits with second precision;
+// settles debits every debitIntervalSeconds; emits batched HCS summaries.
 func (s *Service) runBillingTick(ctx context.Context) {
 	now := s.nowTime()
-	curMin := now.Unix() / 60
+	nowUnix := now.Unix()
 
 	var pauseIDs []string
+	interval := s.debitIntervalSeconds
+	if interval <= 0 {
+		interval = 300
+	}
 
 	for _, id := range s.store.IDs() {
 		var (
-			needPause          bool
-			pauseRemainingBal  int64
-			emitSummary        bool
-			summaryArgs        BillingSummaryArgs
-			summarySessionID   string
+			needPause         bool
+			pauseRemainingBal int64
+			emitSummary       bool
+			summaryArgs       BillingSummaryArgs
+			summarySessionID  string
 		)
 
 		_ = s.store.Update(id, func(v *Session) (bool, error) {
@@ -501,9 +555,10 @@ func (s *Service) runBillingTick(ctx context.Context) {
 
 			v.BilledSeconds++
 
-			if s.hcs != nil && s.ledger == nil {
-				s.hcs.BillingTick(ctx, id, v.BilledSeconds, v.RateCentsPerSecond)
-			}
+			// Let's disable this for now to avoid accidentally sending 1 event per second.
+			// if s.hcs != nil && s.ledger == nil {
+			// 	s.hcs.BillingTick(ctx, id, v.BilledSeconds, v.RateCentsPerSecond)
+			// }
 
 			if s.ledger == nil || v.AgentID == "" {
 				return true, nil
@@ -514,24 +569,34 @@ func (s *Service) runBillingTick(ctx context.Context) {
 				rate = s.rateUnitsPerMinute
 			}
 			if rate <= 0 {
-				rate = 60
+				rate = 1
 			}
 
-			if v.LastPaidMinute == 0 {
-				v.LastPaidMinute = curMin
+			if v.FundsChargeRetryPending && nowUnix < v.FundsRetryAtUnix {
 				return true, nil
 			}
 
-			if v.LastPaidMinute >= curMin {
+			v.BillingNumerator += rate
+			v.SecondsInDebitWindow++
+
+			if v.SecondsInDebitWindow < interval {
 				return true, nil
 			}
 
-			if v.FundsChargeRetryPending && curMin < v.FundsRetryAtMinute {
+			windowSecs := v.SecondsInDebitWindow
+			chargeUnits := v.BillingNumerator / 60
+			remNumerator := v.BillingNumerator % 60
+
+			if chargeUnits <= 0 {
+				v.BillingNumerator = remNumerator
+				v.SecondsInDebitWindow = 0
+				v.FundsChargeRetryPending = false
+				v.FundsRetryAtUnix = 0
 				return true, nil
 			}
 
-			minuteToBill := v.LastPaidMinute
-			rem, err := s.ledger.ChargeUsage(v.AgentID, id, rate, minuteToBill)
+			bucket := v.CommittedDebitSeq + 1
+			rem, err := s.ledger.ChargeUsage(v.AgentID, id, chargeUnits, bucket)
 			if err != nil {
 				if errors.Is(err, ledger.ErrInsufficientFunds) {
 					if v.FundsChargeRetryPending {
@@ -541,23 +606,25 @@ func (s *Service) runBillingTick(ctx context.Context) {
 						v.PaymentStreamActive = false
 						v.AutoPausedForFunds = true
 						v.FundsChargeRetryPending = false
-						v.FundsRetryAtMinute = 0
+						v.FundsRetryAtUnix = 0
 						pauseIDs = append(pauseIDs, id)
 						return true, nil
 					}
 					v.FundsChargeRetryPending = true
-					v.FundsRetryAtMinute = curMin + 1
+					v.FundsRetryAtUnix = nowUnix + 60
 					return true, nil
 				}
 				return false, err
 			}
 
 			v.FundsChargeRetryPending = false
-			v.FundsRetryAtMinute = 0
-			v.LastPaidMinute++
-			v.ChargedUnits += rate
-			v.SummaryPendingUnits += rate
-			v.SummaryPendingRuntimeSeconds += 60
+			v.FundsRetryAtUnix = 0
+			v.BillingNumerator = remNumerator
+			v.SecondsInDebitWindow = 0
+			v.CommittedDebitSeq++
+			v.ChargedUnits += chargeUnits
+			v.SummaryPendingUnits += chargeUnits
+			v.SummaryPendingRuntimeSeconds += windowSecs
 
 			win := v.SummaryWindowMinutes
 			if win < 5 {
@@ -597,7 +664,6 @@ func (s *Service) runBillingTick(ctx context.Context) {
 
 	for _, id := range pauseIDs {
 		if err := s.naryo.PauseEgress(ctx, id); err != nil {
-			// best-effort
 			continue
 		}
 		s.recordActivity("pipeline_paused", id, map[string]any{"reason": "insufficient_balance"})

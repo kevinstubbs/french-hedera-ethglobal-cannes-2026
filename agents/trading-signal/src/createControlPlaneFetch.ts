@@ -52,14 +52,33 @@ function makePublicClient(
   });
 }
 
+/** Drop localhost RPC when paying on Base Sepolia — leftover Anvil URLs break signing against chain 84532. */
+function effectiveEvmRpcUrl(x402Network: string, evmRpcUrl: string | undefined): string | undefined {
+  const trimmed = evmRpcUrl?.trim();
+  if (!trimmed) return undefined;
+  const m = /^eip155:(\d+)$/i.exec(x402Network.trim());
+  const id = m ? Number(m[1]) : 0;
+  if (id !== baseSepolia.id) return trimmed;
+  try {
+    const u = new URL(trimmed);
+    if (u.hostname === "localhost" || u.hostname === "127.0.0.1") {
+      return undefined;
+    }
+  } catch {
+    return trimmed;
+  }
+  return trimmed;
+}
+
 /**
- * Returns a `fetch` that retries on HTTP 402 with a PAYMENT-SIGNATURE header (x402, EVM exact),
- * consistent with the Go API’s x402 payment middleware.
+ * Returns a `fetch` that implements the x402 client flow from `@x402/fetch`: first request, on 402 parse
+ * requirements, sign (EVM exact), retry with PAYMENT-SIGNATURE — same as the Go payment middleware expects.
  *
- * Routes that never return 402 (e.g. `GET /v1/pipelines/{id}/status`) behave like plain fetch.
+ * Only `POST .../start` is x402-gated (amount = X402_PRICE × X402_START_RUNWAY_SECONDS). `GET .../status`
+ * uses prepaid balance only (must be > 0 while running/paused); it is not in {@link PIPELINE_X402_ROUTE_KEYS}.
  *
- * For the list of paid mutations, see {@link PIPELINE_X402_ROUTE_KEYS} in `./pipelineX402Routes.js`
- * (mirrors `middleware.PipelineRoutes` in `internal/http/middleware/x402.go`).
+ * Mirrors `middleware.PipelineRoutes` in `internal/http/middleware/x402.go`.
+ * Prepaid ledger credits are separate (off-chain units); `POST .../topup/x402` is not payment-gated by the middleware.
  */
 export function createControlPlaneFetch(options: ControlPlaneFetchOptions): typeof fetch {
   const {
@@ -69,14 +88,15 @@ export function createControlPlaneFetch(options: ControlPlaneFetchOptions): type
     fetchImpl = globalThis.fetch.bind(globalThis),
   } = options;
 
-  const chain = chainFromCaip2(x402Network, evmRpcUrl);
+  const rpc = effectiveEvmRpcUrl(x402Network, evmRpcUrl);
+  const chain = chainFromCaip2(x402Network, rpc);
   const account = privateKeyToAccount(evmPrivateKey);
-  const publicClient = makePublicClient(chain, evmRpcUrl);
+  const publicClient = makePublicClient(chain, rpc);
   const evmSigner = toClientEvmSigner(account, publicClient);
 
   const client = new x402Client().register(
     x402Network as Network,
-    new ExactEvmScheme(evmSigner, { rpcUrl: evmRpcUrl }),
+    new ExactEvmScheme(evmSigner, { rpcUrl: rpc }),
   );
 
   return wrapFetchWithPayment(fetchImpl, client);

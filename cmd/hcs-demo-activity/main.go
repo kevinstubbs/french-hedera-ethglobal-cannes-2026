@@ -11,6 +11,8 @@
 // Local defaults match hiero ClientForName("local"): gRPC 127.0.0.1:50211, mirror 127.0.0.1:5600.
 // Override with HEDERA_LOCAL_GRPC, HEDERA_LOCAL_NODE_ACCOUNT_ID (default 0.0.3), HEDERA_LOCAL_MIRROR (comma-separated).
 // For plaintext local gRPC, set HEDERA_LOCAL_PLAINTEXT=1.
+// Optional: HEDERA_GRPC_DEADLINE (e.g. 2m) — default 2m to reduce DeadlineExceeded on long demo runs.
+// Optional: MIRROR_REST_URL (default http://127.0.0.1:5551) — printed on first submit for mirror tx lookup hints.
 package main
 
 import (
@@ -59,6 +61,7 @@ func main() {
 		log.Fatalf("operator key: %v", err)
 	}
 	client.SetOperator(operator, key)
+	applyClientDeadline(client)
 
 	if *createTopic {
 		tid, err := createConsensusTopic(client)
@@ -103,11 +106,42 @@ func main() {
 		}
 		txID := resp.TransactionID.String()
 		log.Printf("hcs-demo-activity: submitted seq=%d tx=%s bytes=%d", seq, txID, len(payload))
+		if seq == 1 {
+			if p := mirrorRESTTransactionPath(resp.TransactionID); p != "" {
+				base := strings.TrimSuffix(strings.TrimSpace(os.Getenv("MIRROR_REST_URL")), "/")
+				if base == "" {
+					base = "http://127.0.0.1:5551"
+				}
+				log.Printf("hcs-demo-activity: mirror lookup %s/api/v1/transactions/%s (404 ⇒ mirror at %s is not ingesting txs from this consensus node)", base, p, base)
+			}
+		}
 		if *once {
 			return
 		}
 		time.Sleep(interval)
 	}
+}
+
+// mirrorRESTTransactionPath builds the {transactionId} path segment for Hiero mirror REST (GET /api/v1/transactions/{id}).
+func mirrorRESTTransactionPath(id hiero.TransactionID) string {
+	if id.AccountID == nil || id.ValidStart == nil {
+		return ""
+	}
+	t := *id.ValidStart
+	return fmt.Sprintf("%s-%d-%09d", id.AccountID.String(), t.Unix(), t.Nanosecond())
+}
+
+func applyClientDeadline(client *hiero.Client) {
+	if client == nil {
+		return
+	}
+	d := 2 * time.Minute
+	if s := strings.TrimSpace(os.Getenv("HEDERA_GRPC_DEADLINE")); s != "" {
+		if parsed, err := time.ParseDuration(s); err == nil && parsed > 0 {
+			d = parsed
+		}
+	}
+	client.SetGrpcDeadline(d)
 }
 
 func createConsensusTopic(client *hiero.Client) (hiero.TopicID, error) {

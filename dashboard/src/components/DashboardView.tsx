@@ -1,8 +1,10 @@
+import { ObservabilityRealtimeChart } from "@/components/ObservabilityRealtimeChart";
 import type {
   PipelineDetailResponse,
   PipelineSessionDetail,
   Summary,
 } from "@/lib/types";
+import type { TelemetryChartRow } from "@/lib/telemetryFromSummary";
 
 const HEDERA_LOCAL_NODE_README =
   "https://github.com/hiero-ledger/hiero-local-node/blob/main/README.md" as const;
@@ -22,6 +24,8 @@ export type DashboardViewProps = {
   pipelineDetail?: PipelineDetailResponse | null;
   pipelineDetailLoading?: boolean;
   pipelineDetailErr?: string | null;
+  /** Minute-bucket series built in the browser from summary polling. */
+  telemetryRows?: TelemetryChartRow[];
 };
 
 function stateStyles(state: string) {
@@ -75,6 +79,7 @@ export function DashboardView({
   pipelineDetail = null,
   pipelineDetailLoading = false,
   pipelineDetailErr = null,
+  telemetryRows = [],
 }: DashboardViewProps) {
   const pay = data?.payments as Record<string, unknown> | undefined;
   const x402 = pay?.x402 as Record<string, unknown> | undefined;
@@ -253,6 +258,20 @@ export function DashboardView({
               }
               hint="paymentStreamActive"
             />
+          </section>
+
+          <section className="rounded-2xl border border-white/[0.07] bg-[#121218]/80 p-6 shadow-[0_0_0_1px_rgba(255,255,255,0.03)_inset]">
+            <h2 className="font-display text-lg font-medium text-zinc-100">
+              Realtime (this browser session)
+            </h2>
+            <p className="mt-1 max-w-3xl text-xs leading-relaxed text-zinc-500">
+              Aggregates each summary poll (~3s) into UTC minute buckets. Activity
+              rows are deduped so the ring buffer does not double-count across
+              polls.
+            </p>
+            <div className="mt-6">
+              <ObservabilityRealtimeChart data={telemetryRows} />
+            </div>
           </section>
 
           <div className="grid gap-8 lg:grid-cols-2">

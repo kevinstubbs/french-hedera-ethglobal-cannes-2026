@@ -104,7 +104,7 @@ func summarizePayments(svc *pipeline.Service, sessions []pipeline.Session, activ
 	}
 	return map[string]any{
 		"x402": map[string]any{
-			"note": "Paid mutations use Coinbase x402 (PAYMENT-SIGNATURE). This summary infers state from sessions + activity only.",
+			"note": "Only POST /v1/pipelines/{id}/start uses x402 (PAYMENT-SIGNATURE); other control-plane mutations use prepaid metering.",
 		},
 		"prepaid": map[string]any{
 			"note":              "Off-chain prepaid units per agent; top up via POST /v1/agents/{agentId}/topup/x402 or .../deposit.",

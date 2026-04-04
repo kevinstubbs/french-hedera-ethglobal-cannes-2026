@@ -1,6 +1,6 @@
 # Trading signal agent (scaffold)
 
-TypeScript package for the demo **trading / signal** agent: **x402** against the Go control plane (`PipelineRoutes`) and **Hedera Agent Kit** for **HBAR** actions (poll loop and transfers are follow-up work).
+TypeScript package for the demo **trading / signal** agent: **x402** only for **`POST /v1/pipelines/{id}/start`** on the Go control plane (`PipelineRoutes`); other REST mutations use prepaid balance. **Hedera Agent Kit** covers **HBAR** actions (poll loop and transfers are follow-up work).
 
 ## Setup
 
@@ -28,3 +28,14 @@ await fetchPaid(`${process.env.API_BASE_URL}/v1/pipelines`, { method: "POST", bo
 ```
 
 `pipelineRouteRequiresX402(method, pathname)` mirrors `internal/http/middleware/x402.go` so you can assert or branch before calling paid endpoints.
+
+## Demo (live API)
+
+Fill `.env` from `.env.example` (Base Sepolia payer key, `API_BASE_URL`, optional `NARYO_INGEST_SECRET` matching the Go API). Then:
+
+```bash
+cd agents/trading-signal
+npm run demo
+```
+
+This builds `dist/`, runs `scripts/demo-control-plane.mjs`: create pipeline → `POST .../start` with x402 → optional synthetic Naryo ingest → prints `GET .../status` (including `recentNaryoEvents` when ingest succeeded).

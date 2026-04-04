@@ -29,9 +29,11 @@ type Session struct {
 	// Prepaid / per-minute billing (off-chain ledger + batched HCS summaries).
 	RateUnitsPerMinute           int64     `json:"rateUnitsPerMinute"`
 	ChargedUnits                 int64     `json:"chargedUnits"`
-	LastPaidMinute               int64     `json:"lastPaidMinute,omitempty"`
+	BillingNumerator             int64     `json:"billingNumerator,omitempty"`
+	SecondsInDebitWindow         int64     `json:"secondsInDebitWindow,omitempty"`
+	CommittedDebitSeq            int64     `json:"-"`
 	FundsChargeRetryPending      bool      `json:"-"`
-	FundsRetryAtMinute           int64     `json:"-"`
+	FundsRetryAtUnix             int64     `json:"-"`
 	SummaryPendingUnits          int64     `json:"-"`
 	SummaryPendingRuntimeSeconds int64     `json:"-"`
 	LastSummaryEmittedAt         time.Time `json:"-"`

@@ -67,7 +67,8 @@ async function fetchWithAutoPay(url, init = {}) {
 }
 
 const root = base.replace(/\/+$/, "");
-const create = await fetchWithAutoPay(`${root}/v1/pipelines`, {
+// Create is not x402-gated. POST .../start and GET .../status (when prepaid empty) use x402. (Ledger + agentId: create also needs balance.)
+const create = await fetch(`${root}/v1/pipelines`, {
   method: "POST",
   headers: { "Content-Type": "application/json", Accept: "application/json" },
   body: JSON.stringify({ agentId: "pairwise-agent" }),

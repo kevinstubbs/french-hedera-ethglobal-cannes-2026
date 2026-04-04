@@ -101,7 +101,7 @@ func (mockNaryo) Stats() map[string]any {
 	return map[string]any{"mode": "mockNaryo"}
 }
 
-func TestPrepaidMinuteCharge(t *testing.T) {
+func TestPrepaidPeriodicDebit(t *testing.T) {
 	ctx := context.Background()
 	tick := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return tick }
@@ -113,6 +113,7 @@ func TestPrepaidMinuteCharge(t *testing.T) {
 	svc := NewService(NewMemoryStore(), &mockNaryo{}, nil, 1, nil,
 		WithPrepaidLedger(led),
 		WithRateUnitsPerMinute(60),
+		WithDebitIntervalSeconds(60),
 		WithSummaryWindowMinutes(5),
 		WithClock(clock),
 	)
@@ -128,13 +129,13 @@ func TestPrepaidMinuteCharge(t *testing.T) {
 	}
 	bal, _ := led.GetBalance("agent-1")
 	if bal != 10_000 {
-		t.Fatalf("before minute rollover want 10000 got %d", bal)
+		t.Fatalf("before first debit window want 10000 got %d", bal)
 	}
-	tick = tick.Add(time.Minute)
 	svc.BillingTick(ctx)
 	bal, _ = led.GetBalance("agent-1")
+	// 60 seconds at 60 units/min: numerator 3600 -> 60 units charged
 	if bal != 10_000-60 {
-		t.Fatalf("after one minute charge want %d got %d", 10_000-60, bal)
+		t.Fatalf("after first window want %d got %d", 10_000-60, bal)
 	}
 }
 
@@ -147,16 +148,20 @@ func TestPrepaidBillingSummaryWindow(t *testing.T) {
 	_ = led.Credit("a1", 100_000, "", "seed")
 	svc := NewService(NewMemoryStore(), &mockNaryo{}, h, 1, nil,
 		WithPrepaidLedger(led),
-		WithRateUnitsPerMinute(10),
+		WithRateUnitsPerMinute(1),
+		WithDebitIntervalSeconds(60),
 		WithSummaryWindowMinutes(5),
 		WithClock(clock),
 	)
 	sess, _ := svc.Create(ctx, "a1")
 	_ = svc.Start(ctx, sess.ID)
-	// Anchor minute, then one charge per minute until summary window elapses (5m after first charge).
-	svc.BillingTick(ctx)
-	for i := 0; i < 7; i++ {
-		tick = tick.Add(time.Minute)
+	// First debit after 60 ticks at t0 (1 unit).
+	for range 60 {
+		svc.BillingTick(ctx)
+	}
+	// Advance wall clock past summary window, then second debit triggers billing_summary.
+	tick = tick.Add(6 * time.Minute)
+	for range 60 {
 		svc.BillingTick(ctx)
 	}
 	if h.summaries < 1 {
@@ -164,12 +169,15 @@ func TestPrepaidBillingSummaryWindow(t *testing.T) {
 	}
 }
 
-func TestStartRejectedWithoutBalance(t *testing.T) {
+func TestCreateRejectedWithoutBalance(t *testing.T) {
 	ctx := context.Background()
 	led := ledger.NewMemoryLedger()
-	svc := NewService(NewMemoryStore(), &mockNaryo{}, nil, 1, nil, WithPrepaidLedger(led))
-	sess, _ := svc.Create(ctx, "b1")
-	err := svc.Start(ctx, sess.ID)
+	svc := NewService(NewMemoryStore(), &mockNaryo{}, nil, 1, nil,
+		WithPrepaidLedger(led),
+		WithRateUnitsPerMinute(1),
+		WithMinStartMinutes(10),
+	)
+	_, err := svc.Create(ctx, "b1")
 	if err == nil {
 		t.Fatal("expected error")
 	}

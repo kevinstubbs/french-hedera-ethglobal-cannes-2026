@@ -74,10 +74,11 @@ func (f ErrorVerifyFacilitator) GetSupported(ctx context.Context) (x402.Supporte
 // TestX402Config returns config aligned with [MockFacilitator] supported kinds.
 func TestX402Config() config.X402 {
 	return config.X402{
-		FacilitatorURL: "http://unused.example",
-		PayTo:          "0x1111111111111111111111111111111111111111",
-		Network:        "eip155:84532",
-		Price:          "$0.001",
+		FacilitatorURL:     "http://unused.example",
+		PayTo:              "0x1111111111111111111111111111111111111111",
+		Network:            "eip155:84532",
+		Price:              "$0.001",
+		StartRunwaySeconds: 1,
 	}
 }
 

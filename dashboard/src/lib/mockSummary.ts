@@ -87,7 +87,7 @@ export const mockPipelineDetailSess8f2a1c: PipelineDetailResponse = {
     rateCentsPerSecond: 2,
     lastNaryoOpId: "naryo-op-003",
     config: { template: "signal-v2", region: "eu-west" },
-    rateUnitsPerMinute: 60,
+    rateUnitsPerMinute: 1,
     chargedUnits: 120,
     summaryWindowMinutes: 10,
     autoPausedForFunds: false,

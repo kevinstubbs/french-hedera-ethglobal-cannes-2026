@@ -1,8 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DashboardView, type MainTab } from "@/components/DashboardView";
 import type { PipelineDetailResponse, Summary } from "@/lib/types";
+import {
+  createTelemetryAccumulator,
+  ingestAndProject,
+  type TelemetryChartRow,
+} from "@/lib/telemetryFromSummary";
 
 export function DashboardClient() {
   const [tab, setTab] = useState<MainTab>("observability");
@@ -18,6 +23,8 @@ export function DashboardClient() {
   const [pipelineDetailErr, setPipelineDetailErr] = useState<string | null>(
     null,
   );
+  const telemetryAcc = useRef(createTelemetryAccumulator());
+  const [telemetryRows, setTelemetryRows] = useState<TelemetryChartRow[]>([]);
 
   const hederaExplorerUrl = useMemo(
     () =>
@@ -38,7 +45,9 @@ export function DashboardClient() {
           throw new Error(j.error || `HTTP ${r.status}`);
         }
         if (!stop) {
-          setData(j as Summary);
+          const s = j as Summary;
+          setData(s);
+          setTelemetryRows(ingestAndProject(telemetryAcc.current, s));
           setErr(null);
         }
       } catch (e) {
@@ -115,6 +124,7 @@ export function DashboardClient() {
       pipelineDetail={pipelineDetail}
       pipelineDetailLoading={pipelineDetailLoading}
       pipelineDetailErr={pipelineDetailErr}
+      telemetryRows={telemetryRows}
     />
   );
 }

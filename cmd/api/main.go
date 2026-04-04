@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -28,6 +29,9 @@ func main() {
 	defer stop()
 
 	xcfg := config.LoadX402FromEnv()
+	if addr := strings.TrimSpace(xcfg.PayTo); addr == "" || strings.EqualFold(addr, "0x0000000000000000000000000000000000000000") {
+		slog.Warn("X402_PAY_TO is unset or zero in this process — PAYMENT-REQUIRED will use payTo=0x0 and USDC settlement reverts. Set a real payee in cmd/api/.env. If you `source` that file without exporting, use: set -a && source cmd/api/.env && set +a && go run ./cmd/api")
+	}
 	hedCfg := config.LoadHederaFromEnv()
 	facilitator := x402http.NewHTTPFacilitatorClient(&x402http.FacilitatorConfig{
 		URL: xcfg.FacilitatorURL,
@@ -51,6 +55,12 @@ func main() {
 	}
 	if ru := config.PrepaidRateUnitsPerMinute(); ru > 0 {
 		svcOpts = append(svcOpts, pipeline.WithRateUnitsPerMinute(ru))
+	}
+	if di := config.PrepaidDebitIntervalSeconds(); di > 0 {
+		svcOpts = append(svcOpts, pipeline.WithDebitIntervalSeconds(di))
+	}
+	if ms := config.PrepaidMinStartMinutes(); ms > 0 {
+		svcOpts = append(svcOpts, pipeline.WithMinStartMinutes(ms))
 	}
 	svc := pipeline.NewService(store, naryoClient, hcs, 1, activity, svcOpts...)
 

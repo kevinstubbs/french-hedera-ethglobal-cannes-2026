@@ -8,6 +8,7 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/config"
 	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/pipeline"
 )
 
@@ -22,9 +23,15 @@ func NewPipelineServer(svc *pipeline.Service) *mcpsdk.Server {
 		Name:        "rent_pipeline",
 		Description: "Create a new pipeline session (same as POST /v1/pipelines).",
 	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, in rentIn) (*mcpsdk.CallToolResult, map[string]any, error) {
+		if u := config.PrepaidDevAutoCreditUnits(); u > 0 && in.AgentID != "" {
+			_ = svc.CreditTopUp(ctx, pipeline.AgentTopUpArgs{
+				AgentID: in.AgentID, AmountUnits: u, Source: "dev_auto", SourceTxID: "",
+			})
+		}
 		sess, err := svc.Create(ctx, in.AgentID)
 		if err != nil {
-			return errToolResult(http.StatusInternalServerError, map[string]any{"error": err.Error()}, err)
+			st, body := mapPipelineErr(err)
+			return errToolResult(st, body, err)
 		}
 		return okToolResult(http.StatusCreated, map[string]any{
 			"id":    sess.ID,
@@ -81,6 +88,10 @@ func NewPipelineServer(svc *pipeline.Service) *mcpsdk.Server {
 			st, body := mapPipelineErr(err)
 			return errToolResult(st, body, err)
 		}
+		if err := svc.CheckStatusPrepaid(sess); err != nil {
+			st, body := mapPipelineErr(err)
+			return errToolResult(st, body, err)
+		}
 		out := map[string]any{
 			"id":                   sess.ID,
 			"agentId":              sess.AgentID,
@@ -114,7 +125,13 @@ func mapPipelineErr(err error) (int, map[string]any) {
 	case errors.Is(err, pipeline.ErrInvalidTransition):
 		return http.StatusConflict, map[string]any{"error": err.Error()}
 	case errors.Is(err, pipeline.ErrInsufficientPrepaid):
-		return http.StatusConflict, map[string]any{"error": err.Error()}
+		body := map[string]any{"error": err.Error()}
+		var prepaid *pipeline.InsufficientPrepaidError
+		if errors.As(err, &prepaid) {
+			body["requiredPrepaidUnits"] = prepaid.RequiredUnits
+			body["remainingPrepaidUnits"] = prepaid.RemainingUnits
+		}
+		return http.StatusConflict, body
 	default:
 		return http.StatusBadRequest, map[string]any{"error": err.Error()}
 	}

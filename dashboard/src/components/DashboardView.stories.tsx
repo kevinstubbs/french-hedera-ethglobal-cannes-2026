@@ -11,6 +11,7 @@ import {
   mockSummaryEmpty,
   mockSummaryLoaded,
 } from "@/lib/mockSummary";
+import { mockTelemetryChartRows } from "@/lib/mockTelemetry";
 
 const DEFAULT_EXPLORER = "about:blank";
 
@@ -133,6 +134,7 @@ export const WithSampleData: Story = {
         err={null}
         data={mockSummaryLoaded}
         hederaExplorerUrl={DEFAULT_EXPLORER}
+        telemetryRows={mockTelemetryChartRows}
       />
     </div>
   ),
@@ -147,6 +149,7 @@ export const PipelineDetailOpen: Story = {
         err={null}
         data={mockSummaryLoaded}
         hederaExplorerUrl={DEFAULT_EXPLORER}
+        telemetryRows={mockTelemetryChartRows}
       />
     </div>
   ),
@@ -161,6 +164,7 @@ export const HederaTab: Story = {
         err={null}
         data={mockSummaryLoaded}
         hederaExplorerUrl={DEFAULT_EXPLORER}
+        telemetryRows={mockTelemetryChartRows}
       />
     </div>
   ),

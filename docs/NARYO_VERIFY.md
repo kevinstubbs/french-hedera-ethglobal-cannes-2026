@@ -48,6 +48,25 @@ Then confirm in three layers:
 
    You should see JSON with recent `messages` (or an empty list if the mirror has not caught up yet).
 
+   **If `GET /api/v1/topics/{id}` returns “Topic not found” but `hcs-demo-activity` prints successful submits:** the **consensus node** accepted the transactions; the **mirror** is a separate importer/database. A 404 means that mirror has **not** recorded that topic entity yet (lag, importer stuck, or stack out of sync). Check whether the mirror at least sees the **submit** transactions (replace `@` in the logged tx id with `-`):
+
+   ```bash
+   # tx from log: 0.0.2@1775326517.903195401  →  path id: 0.0.2-1775326517-903195401
+   curl -sS "http://127.0.0.1:5551/api/v1/transactions/0.0.2-1775326517-903195401"
+   ```
+
+   - If this returns **404** too, the mirror on **5551** is not ingesting the same ledger your client uses (wrong port, wrong Docker stack, or mirror not running).
+   - If this returns **200** but `/topics/0.0.1048` stays missing, treat it as **mirror/topic-indexing lag or a local-node bug** — try restarting **hedera-local-node**, waiting a few minutes, or checking mirror/importer logs.
+
+   **If the transaction GET is still 404**, check whether the mirror has **any** data at all (empty DB / broken importer / not the hedera-local-node mirror):
+
+   ```bash
+   curl -sS "http://127.0.0.1:5551/api/v1/transactions?limit=5&order=desc"
+   curl -sS "http://127.0.0.1:5551/api/v1/transactions?account.id=0.0.2&limit=10&order=desc"
+   ```
+
+   When the list is **empty** while consensus accepts submits on **50211**, the record stream is not reaching this mirror (e.g. **hedera-local-node** `record-streams-uploader` / MinIO / importer path — restart the full local stack from `hedera-local-node`, confirm **both** `network-node` and **mirror** containers are healthy). **`hcs-demo-activity`** also prints a mirror URL built from the SDK transaction id on the first submit; use that exact path to rule out manual formatting mistakes.
+
 2. **Naryo Configuration API lists the filter** (when the build exposes it):
 
    ```bash

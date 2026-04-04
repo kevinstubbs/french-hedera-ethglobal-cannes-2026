@@ -8,7 +8,7 @@ import (
 )
 
 func TestNaryoMockClientCallSequenceLifecycle(t *testing.T) {
-	ts, client, _, nm := newTestStackWith(t, stackConfig{})
+	ts, client, _, nm, _ := newTestStackWith(t, stackConfig{})
 	if nm.EnsureCalls != 0 {
 		t.Fatalf("unexpected initial ensure calls: %d", nm.EnsureCalls)
 	}

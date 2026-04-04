@@ -57,15 +57,19 @@ func (a *API) CreatePipeline(w http.ResponseWriter, r *http.Request) {
 	var body createBody
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	_ = r.Body.Close()
-	sess, err := a.Svc.Create(r.Context(), body.AgentID)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
 	if u := config.PrepaidDevAutoCreditUnits(); u > 0 && body.AgentID != "" {
 		_ = a.Svc.CreditTopUp(r.Context(), pipeline.AgentTopUpArgs{
 			AgentID: body.AgentID, AmountUnits: u, Source: "dev_auto", SourceTxID: "",
 		})
+	}
+	sess, err := a.Svc.Create(r.Context(), body.AgentID)
+	if err != nil {
+		if errors.Is(err, pipeline.ErrInsufficientPrepaid) {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id":    sess.ID,
@@ -80,6 +84,14 @@ func (a *API) GetStatus(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, pipeline.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := a.Svc.CheckStatusPrepaid(sess); err != nil {
+		if errors.Is(err, pipeline.ErrInsufficientPrepaid) {
+			writeErr(w, err)
 			return
 		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -224,8 +236,8 @@ func (a *API) PaymentStream(w http.ResponseWriter, r *http.Request) {
 }
 
 type topUpX402Body struct {
-	AmountUnits      int64  `json:"amountUnits"`
-	IdempotencyKey   string `json:"idempotencyKey"`
+	AmountUnits    int64  `json:"amountUnits"`
+	IdempotencyKey string `json:"idempotencyKey"`
 }
 
 // TopUpX402 handles POST /v1/agents/{agentId}/topup/x402 (payment-gated). Credits prepaid after x402 succeeds.
@@ -317,7 +329,16 @@ func writeErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, pipeline.ErrInvalidTransition):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 	case errors.Is(err, pipeline.ErrInsufficientPrepaid):
-		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		var prepaid *pipeline.InsufficientPrepaidError
+		if errors.As(err, &prepaid) {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":                 prepaid.Error(),
+				"requiredPrepaidUnits":  prepaid.RequiredUnits,
+				"remainingPrepaidUnits": prepaid.RemainingUnits,
+			})
+		} else {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		}
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}

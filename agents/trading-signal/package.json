@@ -16,7 +16,8 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "demo": "npm run build && node scripts/demo-control-plane.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -26,6 +27,7 @@
     "@x402/core": "^2.9.0",
     "@x402/evm": "^2.9.0",
     "@x402/fetch": "^2.9.0",
+    "dotenv": "^17.4.0",
     "hedera-agent-kit": "^3.8.2",
     "viem": "^2.39.3"
   },

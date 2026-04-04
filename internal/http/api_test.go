@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	x402 "github.com/coinbase/x402/go"
 
@@ -28,7 +29,7 @@ type stackConfig struct {
 	HederaCfg   config.Hedera
 }
 
-func newTestStackWith(t *testing.T, cfg stackConfig) (*httptest.Server, *http.Client, *pipeline.Service, *naryo.MockClient) {
+func newTestStackWith(t *testing.T, cfg stackConfig) (*httptest.Server, *http.Client, *pipeline.Service, *naryo.MockClient, *ledger.MemoryLedger) {
 	t.Helper()
 	t.Setenv("NARYO_INGEST_SECRET", "test-naryo-secret")
 
@@ -40,8 +41,10 @@ func newTestStackWith(t *testing.T, cfg stackConfig) (*httptest.Server, *http.Cl
 	nm := &naryo.MockClient{}
 	store := pipeline.NewMemoryStore()
 	var opts []pipeline.ServiceOption
+	var memLed *ledger.MemoryLedger
 	if cfg.WithLedger {
-		opts = append(opts, pipeline.WithPrepaidLedger(ledger.NewMemoryLedger()))
+		memLed = ledger.NewMemoryLedger()
+		opts = append(opts, pipeline.WithPrepaidLedger(memLed))
 	}
 	svc := pipeline.NewService(store, nm, nil, 1, nil, opts...)
 	api := &API{Svc: svc, HederaCfg: cfg.HederaCfg}
@@ -59,11 +62,11 @@ func newTestStackWith(t *testing.T, cfg stackConfig) (*httptest.Server, *http.Cl
 	ts := httptest.NewServer(root)
 	t.Cleanup(ts.Close)
 	c := &http.Client{Transport: &x402test.AutoPayTransport{Base: http.DefaultTransport}}
-	return ts, c, svc, nm
+	return ts, c, svc, nm, memLed
 }
 
 func newTestStack(t *testing.T) (*httptest.Server, *http.Client, *pipeline.Service) {
-	ts, c, svc, _ := newTestStackWith(t, stackConfig{})
+	ts, c, svc, _, _ := newTestStackWith(t, stackConfig{})
 	return ts, c, svc
 }
 
@@ -145,19 +148,101 @@ func TestGetStatusDoesNotRequirePayment(t *testing.T) {
 	}
 }
 
-func TestAllPipelineX402RoutesRequirePaymentWithoutAutoPay(t *testing.T) {
-	ts, _, _, _ := newTestStackWith(t, stackConfig{})
+func TestGetStatusConflictWhenPrepaidExhausted(t *testing.T) {
+	t.Setenv("PREPAID_DEV_AUTO_CREDIT_UNITS", "10000")
+	ts, autoClient, _, _, led := newTestStackWith(t, stackConfig{WithLedger: true})
+	if led == nil {
+		t.Fatal("expected ledger")
+	}
+	cr, err := autoClient.Post(ts.URL+"/v1/pipelines", "application/json", strings.NewReader(`{"agentId":"ag-exhaust"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cr.Body.Close()
+	if cr.StatusCode != http.StatusCreated {
+		b, _ := io.ReadAll(cr.Body)
+		t.Fatalf("create: %d %s", cr.StatusCode, string(b))
+	}
+	var out struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(cr.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	sr, err := autoClient.Post(ts.URL+"/v1/pipelines/"+out.ID+"/start", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sr.Body.Close()
+	if sr.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(sr.Body)
+		t.Fatalf("start: %d %s", sr.StatusCode, string(b))
+	}
+	led.TestingSetBalance("ag-exhaust", 0)
+
+	plain := &http.Client{Timeout: 5 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/v1/pipelines/"+out.ID+"/status", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept", "application/json")
+	nopay, err := plain.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nopay.Body.Close()
+	if nopay.StatusCode != http.StatusConflict {
+		b, _ := io.ReadAll(nopay.Body)
+		t.Fatalf("expected 409 when prepaid empty on running session, got %d %s", nopay.StatusCode, string(b))
+	}
+
+	led.TestingSetBalance("ag-exhaust", 1)
+	req2, err := http.NewRequest(http.MethodGet, ts.URL+"/v1/pipelines/"+out.ID+"/status", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req2.Header.Set("Accept", "application/json")
+	ok, err := plain.Do(req2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ok.Body.Close()
+	if ok.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(ok.Body)
+		t.Fatalf("expected 200 when prepaid > 0, got %d %s", ok.StatusCode, string(b))
+	}
+}
+
+func TestOnlyPipelineStartRequiresPaymentWithoutAutoPay(t *testing.T) {
+	ts, _, _, _, _ := newTestStackWith(t, stackConfig{})
 	client := ts.Client()
 	pid := "deadbeef"
 	agent := "agent1"
 
-	tests := []struct {
+	t.Run("start", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/pipelines/"+pid+"/start", strings.NewReader(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusPaymentRequired {
+			t.Fatalf("expected 402, got %d body=%s", resp.StatusCode, string(body))
+		}
+	})
+
+	free := []struct {
 		method string
 		path   string
 		body   string
 	}{
-		{http.MethodPost, "/v1/pipelines", `{}`},
-		{http.MethodPost, "/v1/pipelines/" + pid + "/start", `{}`},
+		{http.MethodPost, "/v1/pipelines", `{"agentId":"` + agent + `"}`},
 		{http.MethodPost, "/v1/pipelines/" + pid + "/stop", `{}`},
 		{http.MethodPost, "/v1/pipelines/" + pid + "/pause", `{}`},
 		{http.MethodPost, "/v1/pipelines/" + pid + "/resume", `{}`},
@@ -165,15 +250,18 @@ func TestAllPipelineX402RoutesRequirePaymentWithoutAutoPay(t *testing.T) {
 		{http.MethodPut, "/v1/pipelines/" + pid + "/payment-stream", `{"active":true}`},
 		{http.MethodPost, "/v1/agents/" + agent + "/topup/x402", `{"amountUnits":10,"idempotencyKey":"k1"}`},
 		{http.MethodPost, "/v1/agents/" + agent + "/topup/deposit", `{"transactionId":"0.0.1","amountUnits":10}`},
+		{http.MethodGet, "/v1/pipelines/" + pid + "/status", ""},
 	}
-	for _, tc := range tests {
+	for _, tc := range free {
 		tc := tc
 		t.Run(tc.method+"_"+tc.path, func(t *testing.T) {
 			req, err := http.NewRequest(tc.method, ts.URL+tc.path, strings.NewReader(tc.body))
 			if err != nil {
 				t.Fatal(err)
 			}
-			req.Header.Set("Content-Type", "application/json")
+			if tc.body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
 			req.Header.Set("Accept", "application/json")
 			resp, err := client.Do(req)
 			if err != nil {
@@ -181,17 +269,17 @@ func TestAllPipelineX402RoutesRequirePaymentWithoutAutoPay(t *testing.T) {
 			}
 			body, _ := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
-			if resp.StatusCode != http.StatusPaymentRequired {
-				t.Fatalf("expected 402, got %d body=%s", resp.StatusCode, string(body))
+			if resp.StatusCode == http.StatusPaymentRequired {
+				t.Fatalf("unexpected 402 for non-start route, body=%s", string(body))
 			}
 		})
 	}
 }
 
-func TestCreatePipelineRequiresPayment(t *testing.T) {
+func TestCreatePipelineWithoutPayment(t *testing.T) {
 	ts, _, _ := newTestStack(t)
 	client := ts.Client()
-	req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/pipelines", strings.NewReader(`{}`))
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/pipelines", strings.NewReader(`{"agentId":"a1"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,15 +291,27 @@ func TestCreatePipelineRequiresPayment(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusPaymentRequired {
-		t.Fatalf("expected 402, got %d body=%s", resp.StatusCode, string(body))
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 without payment, got %d body=%s", resp.StatusCode, string(body))
 	}
 }
 
 func TestMalformedPaymentSignatureRejected(t *testing.T) {
-	ts, _, _, _ := newTestStackWith(t, stackConfig{})
+	ts, _, _, _, _ := newTestStackWith(t, stackConfig{})
 	client := ts.Client()
-	req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/pipelines", strings.NewReader(`{}`))
+	cr, err := client.Post(ts.URL+"/v1/pipelines", "application/json", strings.NewReader(`{"agentId":"sig-test"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	_ = json.NewDecoder(cr.Body).Decode(&created)
+	_ = cr.Body.Close()
+	if cr.StatusCode != http.StatusCreated || created.ID == "" {
+		t.Fatalf("create pipeline: %d", cr.StatusCode)
+	}
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/pipelines/"+created.ID+"/start", strings.NewReader(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,29 +329,55 @@ func TestMalformedPaymentSignatureRejected(t *testing.T) {
 }
 
 func TestPaymentRejectedWhenFacilitatorVerifyInvalid(t *testing.T) {
-	ts, _, _, _ := newTestStackWith(t, stackConfig{Facilitator: x402test.RejectVerifyFacilitator{}})
+	ts, _, _, _, _ := newTestStackWith(t, stackConfig{Facilitator: x402test.RejectVerifyFacilitator{}})
+	plain := ts.Client()
+	cr, err := plain.Post(ts.URL+"/v1/pipelines", "application/json", strings.NewReader(`{"agentId":"a1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		ID string `json:"id"`
+	}
+	_ = json.NewDecoder(cr.Body).Decode(&out)
+	_ = cr.Body.Close()
+	if cr.StatusCode != http.StatusCreated || out.ID == "" {
+		t.Fatalf("create: %d", cr.StatusCode)
+	}
 	client := &http.Client{Transport: &x402test.AutoPayTransport{Base: http.DefaultTransport}}
-	resp, err := client.Post(ts.URL+"/v1/pipelines", "application/json", strings.NewReader(`{"agentId":"a1"}`))
+	resp, err := client.Post(ts.URL+"/v1/pipelines/"+out.ID+"/start", "application/json", strings.NewReader(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusCreated {
+	if resp.StatusCode == http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected create to fail when verify rejects; got 201 body=%s", string(body))
+		t.Fatalf("expected start to fail when verify rejects; got 200 body=%s", string(body))
 	}
 }
 
 func TestPaymentFailsWhenFacilitatorVerifyErrors(t *testing.T) {
-	ts, _, _, _ := newTestStackWith(t, stackConfig{Facilitator: x402test.ErrorVerifyFacilitator{Err: errors.New("facilitator down")}})
+	ts, _, _, _, _ := newTestStackWith(t, stackConfig{Facilitator: x402test.ErrorVerifyFacilitator{Err: errors.New("facilitator down")}})
+	plain := ts.Client()
+	cr, err := plain.Post(ts.URL+"/v1/pipelines", "application/json", strings.NewReader(`{"agentId":"a1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		ID string `json:"id"`
+	}
+	_ = json.NewDecoder(cr.Body).Decode(&out)
+	_ = cr.Body.Close()
+	if cr.StatusCode != http.StatusCreated || out.ID == "" {
+		t.Fatalf("create: %d", cr.StatusCode)
+	}
 	client := &http.Client{Transport: &x402test.AutoPayTransport{Base: http.DefaultTransport}}
-	resp, err := client.Post(ts.URL+"/v1/pipelines", "application/json", strings.NewReader(`{"agentId":"a1"}`))
+	resp, err := client.Post(ts.URL+"/v1/pipelines/"+out.ID+"/start", "application/json", strings.NewReader(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusCreated {
-		t.Fatal("expected create to fail when facilitator errors")
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("expected start to fail when facilitator errors")
 	}
 }
 
@@ -307,7 +433,7 @@ func TestCreateAndStartWithPayment(t *testing.T) {
 }
 
 func TestStopPauseResumeReconfigurePaymentStreamWithPayment(t *testing.T) {
-	ts, client, _, _ := newTestStackWith(t, stackConfig{})
+	ts, client, _, _, _ := newTestStackWith(t, stackConfig{})
 	resp, err := client.Post(ts.URL+"/v1/pipelines", "application/json", strings.NewReader(`{"agentId":"a1"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -351,7 +477,7 @@ func TestStopPauseResumeReconfigurePaymentStreamWithPayment(t *testing.T) {
 }
 
 func TestTopUpX402WithPayment(t *testing.T) {
-	ts, client, _, _ := newTestStackWith(t, stackConfig{WithLedger: true})
+	ts, client, _, _, _ := newTestStackWith(t, stackConfig{WithLedger: true})
 	resp, err := client.Post(ts.URL+"/v1/agents/agent-x/topup/x402", "application/json",
 		strings.NewReader(`{"amountUnits":42,"idempotencyKey":"idem-1"}`))
 	if err != nil {
@@ -365,7 +491,7 @@ func TestTopUpX402WithPayment(t *testing.T) {
 }
 
 func TestTopUpDepositWithPaymentSkipVerify(t *testing.T) {
-	ts, client, _, _ := newTestStackWith(t, stackConfig{
+	ts, client, _, _, _ := newTestStackWith(t, stackConfig{
 		WithLedger: true,
 		HederaCfg:  config.Hedera{SkipTopupVerify: true},
 	})
@@ -385,7 +511,7 @@ func TestPairwiseAgentControlPlaneHTTP(t *testing.T) {
 	if testing.Short() {
 		t.Skip("spawns node: run without -short")
 	}
-	ts, _, _, _ := newTestStackWith(t, stackConfig{})
+	ts, _, _, _, _ := newTestStackWith(t, stackConfig{})
 	agentDir, err := filepath.Abs(filepath.Join("..", "..", "agents", "trading-signal"))
 	if err != nil {
 		t.Fatal(err)
@@ -411,7 +537,7 @@ func TestE2E_CreateStartNaryoIngestStatus(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e: run without -short")
 	}
-	ts, client, _, _ := newTestStackWith(t, stackConfig{})
+	ts, client, _, _, _ := newTestStackWith(t, stackConfig{})
 	resp, err := client.Post(ts.URL+"/v1/pipelines", "application/json", strings.NewReader(`{"agentId":"e2e"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -487,7 +613,27 @@ func TestE2E_FullPrepaidAndX402Flow(t *testing.T) {
 		t.Skip("e2e: run without -short")
 	}
 	t.Setenv("PREPAID_DEV_AUTO_CREDIT_UNITS", "0")
-	ts, client, _, _ := newTestStackWith(t, stackConfig{WithLedger: true})
+	ts, client, _, _, _ := newTestStackWith(t, stackConfig{WithLedger: true})
+
+	badCreate, err := client.Post(ts.URL+"/v1/pipelines", "application/json", strings.NewReader(`{"agentId":"e2e-ledger"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = badCreate.Body.Close()
+	if badCreate.StatusCode != http.StatusConflict {
+		t.Fatalf("create without prepaid: expected 409, got %d", badCreate.StatusCode)
+	}
+
+	tu, err := client.Post(ts.URL+"/v1/agents/e2e-ledger/topup/x402", "application/json",
+		strings.NewReader(`{"amountUnits":10000,"idempotencyKey":"e2e-ledger-topup-1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tu.Body.Close()
+	if tu.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(tu.Body)
+		t.Fatalf("topup x402: %d %s", tu.StatusCode, string(b))
+	}
 
 	resp, err := client.Post(ts.URL+"/v1/pipelines", "application/json", strings.NewReader(`{"agentId":"e2e-ledger"}`))
 	if err != nil {
@@ -506,26 +652,6 @@ func TestE2E_FullPrepaidAndX402Flow(t *testing.T) {
 	}
 	if cr.ID == "" {
 		t.Fatal("no session id")
-	}
-
-	badStart, err := client.Post(ts.URL+"/v1/pipelines/"+cr.ID+"/start", "application/json", strings.NewReader(`{}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = badStart.Body.Close()
-	if badStart.StatusCode != http.StatusConflict {
-		t.Fatalf("start without prepaid: expected 409, got %d", badStart.StatusCode)
-	}
-
-	tu, err := client.Post(ts.URL+"/v1/agents/e2e-ledger/topup/x402", "application/json",
-		strings.NewReader(`{"amountUnits":10000,"idempotencyKey":"e2e-ledger-topup-1"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tu.Body.Close()
-	if tu.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(tu.Body)
-		t.Fatalf("topup x402: %d %s", tu.StatusCode, string(b))
 	}
 
 	sr, err := client.Post(ts.URL+"/v1/pipelines/"+cr.ID+"/start", "application/json", strings.NewReader(`{}`))

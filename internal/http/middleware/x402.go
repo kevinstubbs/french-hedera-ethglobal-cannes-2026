@@ -1,7 +1,10 @@
 package middleware
 
 import (
+	"context"
+	"fmt"
 	"net/http"
+	"time"
 
 	x402 "github.com/coinbase/x402/go"
 	x402http "github.com/coinbase/x402/go/http"
@@ -11,30 +14,34 @@ import (
 	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/config"
 )
 
-// PipelineRoutes builds x402 route keys for all payment-gated pipeline controls.
+// PipelineRoutes builds x402 route keys for payment-gated control-plane calls.
+// Only POST /v1/pipelines/{id}/start is gated; the on-chain amount is X402_PRICE × X402_START_RUNWAY_SECONDS.
+// GET /v1/pipelines/{id}/status is not x402-gated — it requires prepaid balance > 0 (running/paused + ledger) in the handler.
+// Prepaid top-up (POST /v1/agents/{id}/topup/x402) is not gated here.
 func PipelineRoutes(cfg config.X402) x402http.RoutesConfig {
+	runSecs := cfg.StartRunwaySeconds
+	if runSecs <= 0 {
+		runSecs = 300
+	}
+	dyn := x402http.DynamicPriceFunc(func(ctx context.Context, reqCtx x402http.HTTPRequestContext) (x402.Price, error) {
+		_ = ctx
+		_ = reqCtx
+		return config.MulUSDPrice(cfg.Price, runSecs)
+	})
 	rc := x402http.RouteConfig{
 		Accepts: x402http.PaymentOptions{
 			{
 				Scheme:  "exact",
 				PayTo:   cfg.PayTo,
-				Price:   cfg.Price,
+				Price:   dyn,
 				Network: x402.Network(cfg.Network),
 			},
 		},
-		Description: "Pipeline control",
+		Description: "Pipeline start",
 		MimeType:    "application/json",
 	}
 	return x402http.RoutesConfig{
-		"POST /v1/pipelines":                      rc,
-		"POST /v1/pipelines/*/start":              rc,
-		"POST /v1/pipelines/*/stop":               rc,
-		"POST /v1/pipelines/*/pause":              rc,
-		"POST /v1/pipelines/*/resume":             rc,
-		"PUT /v1/pipelines/*/reconfigure":         rc,
-		"PUT /v1/pipelines/*/payment-stream":      rc,
-		"POST /v1/agents/*/topup/x402":            rc,
-		"POST /v1/agents/*/topup/deposit":         rc,
+		"POST /v1/pipelines/*/start": rc,
 	}
 }
 
@@ -42,10 +49,20 @@ func PipelineRoutes(cfg config.X402) x402http.RoutesConfig {
 // facilitator is typically x402http.NewHTTPFacilitatorClient; tests may pass a mock implementation.
 func PaymentGate(cfg config.X402, facilitator x402.FacilitatorClient, syncFacilitatorOnStart bool) func(http.Handler) http.Handler {
 	routes := PipelineRoutes(cfg)
-	return x402net.PaymentMiddlewareFromConfig(
-		routes,
+	serverOpts := []x402.ResourceServerOption{x402.WithFacilitatorClient(facilitator)}
+	httpServer := x402http.Newx402HTTPResourceServer(routes, serverOpts...)
+	httpServer.Register(x402.Network(cfg.Network), evmserver.NewExactEvmScheme())
+	timeout := 30 * time.Second
+	if syncFacilitatorOnStart {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		if err := httpServer.Initialize(ctx); err != nil {
+			fmt.Printf("Warning: failed to initialize x402 server: %v\n", err)
+		}
+	}
+	return x402net.PaymentMiddlewareFromHTTPServer(httpServer,
 		x402net.WithFacilitatorClient(facilitator),
-		x402net.WithScheme(x402.Network(cfg.Network), evmserver.NewExactEvmScheme()),
-		x402net.WithSyncFacilitatorOnStart(syncFacilitatorOnStart),
+		x402net.WithSyncFacilitatorOnStart(false),
+		x402net.WithTimeout(timeout),
 	)
 }

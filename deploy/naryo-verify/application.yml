@@ -1,6 +1,9 @@
 # Baseline follows Naryo upstream examples:
 # - Ethereum: examples/quickstart (Anvil on the compose network)
-# - Hedera: examples/hedera-quickstart (local mirror REST; hedera-local-node on host, typically :5551)
+# - Hedera: examples/hedera-quickstart (mirror REST only). Set HEDERA_MIRROR_URL in compose/.env, e.g.
+#     Local:  http://host.docker.internal:5551 (hedera-local-node mirror on host)
+#     Testnet: https://testnet.mirrornode.hedera.com
+#   Set LOCAL_NODE_HCS_TOPIC_ID to your HCS topic (e.g. 0.0.8510924 on testnet). SOLO_HCS_TOPIC_ID is a deprecated alias.
 # Config guide: https://github.com/LF-Decentralized-Trust-labs/Naryo/blob/main/docs/configuration/configuration-core.md
 naryo:
   nodes:
@@ -21,13 +24,13 @@ naryo:
         confirmationBlocks: 1
 
     - id: 7f3b8e1a-4d2c-4b9a-8e5f-1a2b3c4d5e6f
-      name: hedera-local-node
+      name: hedera-mirror
       type: HEDERA
       connection:
         type: HTTP
         endpoint:
-          # hedera-local-node mirror REST (set HEDERA_MIRROR_URL; compose defaults it — do not use
-          # ${VAR:http://...} here: Spring treats the first ':' as the default delimiter).
+          # Injected by docker-compose (.env); default in compose is local hedera-local-node :5551.
+          # Do not use ${VAR:http://...} defaults in YAML — Spring treats ':' as the delimiter.
           url: ${HEDERA_MIRROR_URL}
       interaction:
         strategy: BLOCK_BASED
@@ -44,8 +47,7 @@ naryo:
     configuration: []
     broadcasters: []
 
-  # Declarative Hedera filter (same shape as hedera-quickstart). Set LOCAL_NODE_HCS_TOPIC_ID to a
-  # real topic from hedera-local-node; SOLO_HCS_TOPIC_ID is a deprecated env alias (see compose).
+  # Declarative Hedera filter (hedera-quickstart shape). Topic id at runtime via env (see deploy/naryo-verify/.env.example).
   filters:
     - id: a5605668-7a88-4e5c-b4ee-4a8417b7184d
       name: local-node-hcs-topic

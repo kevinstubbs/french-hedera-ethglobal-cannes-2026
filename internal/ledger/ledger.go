@@ -58,6 +58,19 @@ func (l *MemoryLedger) GetBalance(agentID string) (int64, error) {
 	return l.balances[agentID], nil
 }
 
+// TestingSetBalance overwrites balance for an agent (tests only).
+func (l *MemoryLedger) TestingSetBalance(agentID string, balance int64) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.balances == nil {
+		l.balances = make(map[string]int64)
+	}
+	l.balances[agentID] = balance
+}
+
 // CanAfford reports whether balance >= minUnits.
 func (l *MemoryLedger) CanAfford(agentID string, minUnits int64) (bool, int64, error) {
 	if l == nil {

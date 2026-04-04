@@ -43,7 +43,7 @@ func parseTSRouteKeys(src string) []string {
 		return nil
 	}
 	block := sub[i:j]
-	re := regexp.MustCompile(`"(POST|PUT) /v1[^"]+"`)
+	re := regexp.MustCompile(`"(POST|PUT|GET) /v1[^"]+"`)
 	raw := re.FindAllString(block, -1)
 	keys := make([]string, 0, len(raw))
 	for _, m := range raw {
