@@ -20,6 +20,8 @@ The stack runs **Anvil** (Ethereum) in Compose and points **Hedera** at your **S
 
 See [NARYO_VERIFY.md](./NARYO_VERIFY.md) for scope (Ethereum baseline `PUT` cycle, broadcaster-config + `ALL` broadcasters; filter `POST` skipped on the tested image; declarative Hedera filter in `application.yml`).
 
+**Production intent:** Naryo HTTP broadcasters should target **this platform’s API only**; the API stores events and optionally forwards to per-pipeline agent webhooks, while agents without webhooks use **pull** APIs for history. See [PIPELINE_EVENT_ROUTING.md](./PIPELINE_EVENT_ROUTING.md).
+
 ## Go API
 
 From the repository root:

@@ -4,9 +4,17 @@ services:
   anvil:
     image: ghcr.io/foundry-rs/foundry:stable
     container_name: naryo-verify-anvil
-    command: ["anvil", "--host", "0.0.0.0", "--port", "8545"]
+    # Image uses ENTRYPOINT ["/bin/sh","-c"]; array command breaks -c (anvil never listens). Run anvil directly.
+    entrypoint: ["anvil", "--host", "0.0.0.0", "--port", "8545"]
+    healthcheck:
+      test: ["CMD", "cast", "block-number", "--rpc-url", "http://127.0.0.1:8545"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
     ports:
-      - "8545:8545"
+      # Avoid clashing with hedera-local-node (mirror web3 uses host 8545).
+      - "18545:8545"
     networks:
       - naryo-verify
 
@@ -45,7 +53,7 @@ services:
       SOLO_HCS_TOPIC_ID: ${SOLO_HCS_TOPIC_ID:-0.0.0}
     depends_on:
       anvil:
-        condition: service_started
+        condition: service_healthy
       mongodb:
         condition: service_started
       mock-http:

@@ -45,14 +45,14 @@ Then:
 python3 verify_naryo_api.py
 ```
 
-Expect a final `OK:` line from the script (broadcaster / node checks; broadcaster-configuration may be skipped on known image bugs).
+Expect a final `OK:` line from the script (node checks always; broadcaster CRUD runs only when a **persisted** broadcaster-configuration exists — if create fails with the known NPE and the list is empty, the script skips broadcaster CRUD instead of using a client-only UUID).
 
 ## Ports
 
 | Host | Service |
 |------|---------|
 | 6060 | Naryo Configuration API (`6060` → container `8060`) |
-| 8545 | Anvil JSON-RPC (host; optional debugging) |
+| 18545 | Anvil JSON-RPC on host (container still `anvil:8545` inside compose; 8545 is often used by hedera-local-node web3) |
 | 7070 | Mock HTTP destination (Mockoon) |
 | 27017 | MongoDB (optional; for debugging) |
 

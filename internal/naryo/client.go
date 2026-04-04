@@ -1,3 +1,8 @@
+// Package naryo is the orchestrator adapter for Naryo’s Configuration API (currently mocked).
+//
+// Target production topology: Naryo HTTP broadcasters send only to this platform’s ingest
+// endpoints; the API persists events and optionally POSTs to per-pipeline agent webhooks.
+// Agents without webhooks query the API for historical events. See docs/PIPELINE_EVENT_ROUTING.md.
 package naryo
 
 import "context"

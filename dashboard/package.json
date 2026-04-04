@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build"
   },
   "dependencies": {
     "react": "19.1.0",
@@ -22,6 +24,11 @@
     "tailwindcss": "^4",
     "eslint": "^9",
     "eslint-config-next": "15.5.14",
-    "@eslint/eslintrc": "^3"
+    "@eslint/eslintrc": "^3",
+    "storybook": "^10.3.4",
+    "@storybook/nextjs-vite": "^10.3.4",
+    "@storybook/addon-a11y": "^10.3.4",
+    "@storybook/addon-docs": "^10.3.4",
+    "vite": "^8.0.3"
   }
 }
