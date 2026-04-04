@@ -184,9 +184,9 @@ func TestPaymentRejectedWhenFacilitatorVerifyInvalid(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusCreated {
+	if resp.StatusCode == http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected create to fail when verify rejects; got %d body=%s", resp.StatusCode, string(body))
+		t.Fatalf("expected create to fail when verify rejects; got 201 body=%s", string(body))
 	}
 }
 

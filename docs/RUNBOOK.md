@@ -8,6 +8,25 @@ Operational notes for running the Go API and the Next.js observability dashboard
 - **Node.js** and **npm** (for the dashboard).
 - **Docker** (optional): for standalone Naryo Configuration API checks — see [NARYO_VERIFY.md](./NARYO_VERIFY.md).
 
+## Testing (layered)
+
+From the repository root:
+
+| Command | Purpose |
+|---------|---------|
+| `make test-fast` | Go unit tests with `-short` (skips tests that spawn Node or full mock e2e) + `agents/trading-signal` Vitest. |
+| `make test-full` | All Go tests in `./cmd/...` and `./internal/...` (including Node pairwise + ingest e2e) + Vitest. |
+| `go test ./cmd/... ./internal/... -count=1` | Go only (full). |
+| `cd agents/trading-signal && npm test` | Agent package unit tests only. |
+
+`make test-full` / `make test-fast` print **`>>> Go: PASS`** and **`>>> Vitest: PASS`** and end with **`All tests passed`** when everything succeeds (any failure stops the recipe with a non-zero exit code).
+
+**Reading raw `go test` lines:** each line is one package. **`ok`** means that package’s tests passed (timing on the right). **`?`** means **no test files** in that package — that is normal, not a failure. Only **`FAIL`** indicates failing tests. On narrow terminals, tabs can make columns look merged (e.g. `cmd/api` touching `[no test files]`); widen the window or rely on the Makefile summary lines above.
+
+CI runs Go (`./cmd/...` `./internal/...`) plus `agents/trading-signal` Vitest — see [`.github/workflows/test.yml`](../.github/workflows/test.yml). Use `make test-fast` locally for the `-short` Go lane.
+
+**Contract parity:** Go `middleware.PipelineRoutes` must match `agents/trading-signal/src/pipelineX402Routes.ts` — enforced by `TestPipelineRoutesMatchTypeScriptMirror` in `internal/http/middleware`.
+
 ## Naryo standalone (Configuration API)
 
 ```bash
@@ -45,6 +64,7 @@ PORT=3001 go run ./cmd/api
 | `X402_PAY_TO` | Recipient address for paid routes. |
 | `X402_NETWORK` | CAIP-2 network (default `eip155:84532`). |
 | `X402_PRICE` | Price string per route (default `$0.001`). |
+| `NARYO_INGEST_SECRET` | Shared secret for `POST /internal/naryo/v1/events` (header **`X-Naryo-Webhook-Secret`**). If unset, ingest returns **503**. |
 
 Paid pipeline routes live under **`/v1/`** and require a valid **`PAYMENT-SIGNATURE`** header per x402.
 

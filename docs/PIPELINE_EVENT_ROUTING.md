@@ -4,7 +4,7 @@ This describes the **intended production shape** for how indexed chain data reac
 
 ## Principles
 
-1. **Naryo never calls agent-owned URLs directly.** All HTTP broadcasters in Naryo point at **this platform’s API** (one or a few stable internal URLs), e.g. `POST https://api.example.com/internal/naryo/v1/events` (exact path and versioning are product choices).
+1. **Naryo never calls agent-owned URLs directly.** All HTTP broadcasters in Naryo point at **this platform’s API** (one or a few stable internal URLs). This repo implements **`POST /internal/naryo/v1/events`** (not x402-gated; authenticate with **`X-Naryo-Webhook-Secret`** matching env **`NARYO_INGEST_SECRET`**).
 
 2. **The API is the control plane for delivery.** When a payload arrives from Naryo, the API:
    - authenticates the caller (shared secret, mTLS, or network policy — not agent API keys on Naryo),
