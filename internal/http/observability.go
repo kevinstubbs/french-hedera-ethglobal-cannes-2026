@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -42,6 +43,43 @@ func ObservabilitySummary(deps *ObservabilityDeps) http.HandlerFunc {
 			"activity":  activity,
 			"naryo":     naryo,
 			"payments":  payments,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(payload)
+	}
+}
+
+// ObservabilityPipelineDetail serves GET /observability/v1/pipelines/{id} (session, activity, Naryo events).
+func ObservabilityPipelineDetail(deps *ObservabilityDeps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		id := r.PathValue("id")
+		if id == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing id"})
+			return
+		}
+		sess, err := deps.Svc.Status(id)
+		if err != nil {
+			if errors.Is(err, pipeline.ErrNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		payload := map[string]any{
+			"session":         sess,
+			"recentActivity":  deps.Svc.ActivityForSession(id, 50),
+			"recentNaryoEvents": []any{},
+		}
+		if sess.AgentID != "" {
+			payload["prepaidBalanceUnits"] = deps.Svc.PrepaidBalance(sess.AgentID)
+		}
+		if ev, err := deps.Svc.NaryoEventsForSession(id, 25); err == nil && len(ev) > 0 {
+			payload["recentNaryoEvents"] = ev
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(payload)

@@ -1,4 +1,4 @@
-.PHONY: test test-fast test-full
+.PHONY: test test-fast test-full e2e-pipeline
 
 # Default: fast lane (skips Go tests that spawn Node / long e2e when using -short).
 test: test-fast
@@ -26,3 +26,7 @@ test-full:
 	@echo ">>> Vitest: PASS"
 	@echo ""
 	@echo "All tests passed (full lane)."
+
+# Pipeline e2e only (mock x402; no live Hedera).
+e2e-pipeline:
+	@./scripts/e2e-pipeline.sh

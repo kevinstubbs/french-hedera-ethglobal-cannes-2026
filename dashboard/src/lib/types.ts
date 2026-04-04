@@ -6,6 +6,37 @@ export type PipelineRow = {
   billedSeconds: number;
   rateCentsPerSecond: number;
   lastNaryoOpId?: string;
+  config?: Record<string, unknown>;
+};
+
+/** Full session from observability / status (includes merged reconfigure patch). */
+export type PipelineSessionDetail = {
+  id: string;
+  agentId?: string;
+  state: string;
+  paymentStreamActive: boolean;
+  billedSeconds: number;
+  rateCentsPerSecond: number;
+  lastNaryoOpId?: string;
+  config?: Record<string, unknown>;
+  rateUnitsPerMinute?: number;
+  chargedUnits?: number;
+  lastPaidMinute?: number;
+  summaryWindowMinutes?: number;
+  autoPausedForFunds?: boolean;
+};
+
+export type NaryoInboundEventRow = {
+  eventId: string;
+  payload?: Record<string, unknown>;
+  receivedAt: string;
+};
+
+export type PipelineDetailResponse = {
+  session: PipelineSessionDetail;
+  recentActivity: ActivityRow[];
+  recentNaryoEvents?: NaryoInboundEventRow[];
+  prepaidBalanceUnits?: number;
 };
 
 export type ActivityRow = {

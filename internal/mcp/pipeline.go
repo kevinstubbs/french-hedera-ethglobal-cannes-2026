@@ -89,10 +89,14 @@ func NewPipelineServer(svc *pipeline.Service) *mcpsdk.Server {
 			"paymentStreamActive":  sess.PaymentStreamActive,
 			"rateCentsPerSecond":   sess.RateCentsPerSecond,
 			"lastNaryoOpId":        sess.LastNaryoOpID,
+			"config":               map[string]any{},
 			"rateUnitsPerMinute":   sess.RateUnitsPerMinute,
 			"chargedUnits":         sess.ChargedUnits,
 			"summaryWindowMinutes": sess.SummaryWindowMinutes,
 			"autoPausedForFunds":   sess.AutoPausedForFunds,
+		}
+		if len(sess.Config) > 0 {
+			out["config"] = sess.Config
 		}
 		if sess.AgentID != "" {
 			out["prepaidBalanceUnits"] = svc.PrepaidBalance(sess.AgentID)

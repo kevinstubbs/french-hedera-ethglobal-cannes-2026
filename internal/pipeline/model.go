@@ -23,6 +23,8 @@ type Session struct {
 	// RateCentsPerSecond is logical billing rate used for HCS metadata (integer cents).
 	RateCentsPerSecond int64 `json:"rateCentsPerSecond"`
 	LastNaryoOpID      string `json:"lastNaryoOpId,omitempty"`
+	// Config holds merged reconfigure patches (dashboard / agents).
+	Config map[string]any `json:"config,omitempty"`
 
 	// Prepaid / per-minute billing (off-chain ledger + batched HCS summaries).
 	RateUnitsPerMinute           int64     `json:"rateUnitsPerMinute"`

@@ -1,7 +1,11 @@
-import type { Summary } from "@/lib/types";
+import type {
+  PipelineDetailResponse,
+  PipelineSessionDetail,
+  Summary,
+} from "@/lib/types";
 
-const SOLO_GUIDE =
-  "https://solo.hiero.org/v0.60.0/docs/solo-user-guide/" as const;
+const HEDERA_LOCAL_NODE_README =
+  "https://github.com/hiero-ledger/hiero-local-node/blob/main/README.md" as const;
 
 export type MainTab = "observability" | "hedera";
 
@@ -12,6 +16,12 @@ export type DashboardViewProps = {
   err: string | null;
   data: Summary | null;
   hederaExplorerUrl: string;
+  /** When set, pipeline rows are interactive and a detail panel can open. */
+  selectedPipelineId?: string | null;
+  onSelectPipeline?: (id: string | null) => void;
+  pipelineDetail?: PipelineDetailResponse | null;
+  pipelineDetailLoading?: boolean;
+  pipelineDetailErr?: string | null;
 };
 
 function stateStyles(state: string) {
@@ -39,6 +49,20 @@ function formatTime(iso: string) {
   }
 }
 
+function JsonBlock({ value }: { value: unknown }) {
+  return (
+    <pre className="max-h-56 overflow-auto rounded-lg border border-white/[0.06] bg-black/30 p-3 font-mono text-[11px] leading-relaxed text-zinc-400">
+      {JSON.stringify(value, null, 2)}
+    </pre>
+  );
+}
+
+function sessionMetadata(session: PipelineSessionDetail): Record<string, unknown> {
+  const rest: Record<string, unknown> = { ...session };
+  delete rest.config;
+  return rest;
+}
+
 export function DashboardView({
   tab,
   onTabChange,
@@ -46,6 +70,11 @@ export function DashboardView({
   err,
   data,
   hederaExplorerUrl,
+  selectedPipelineId = null,
+  onSelectPipeline,
+  pipelineDetail = null,
+  pipelineDetailLoading = false,
+  pipelineDetailErr = null,
 }: DashboardViewProps) {
   const pay = data?.payments as Record<string, unknown> | undefined;
   const x402 = pay?.x402 as Record<string, unknown> | undefined;
@@ -55,7 +84,7 @@ export function DashboardView({
       <header className="flex flex-col gap-4 border-b border-white/[0.08] pb-8 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0 flex-1">
           <p className="font-display text-xs uppercase tracking-[0.35em] text-[#c9a227]">
-            {tab === "observability" ? "Observability" : "Hedera (Solo)"}
+            {tab === "observability" ? "Observability" : "Hedera (local node)"}
           </p>
           <h1 className="font-display mt-2 text-4xl font-semibold tracking-tight text-zinc-50 sm:text-5xl">
             {tab === "observability"
@@ -71,22 +100,25 @@ export function DashboardView({
               </>
             ) : (
               <>
-                Embedded Solo Explorer UI (default{" "}
+                Embedded mirror Explorer UI (default{" "}
                 <code className="rounded bg-black/30 px-1 py-0.5 font-mono text-zinc-300">
-                  localhost:8080
+                  localhost:8090
                 </code>
-                ). Deploy the network with{" "}
+                ). Start the network from{" "}
                 <code className="rounded bg-black/30 px-1 py-0.5 font-mono text-zinc-300">
-                  solo one-shot single deploy
+                  hedera-local-node
+                </code>{" "}
+                (<code className="rounded bg-black/30 px-1 py-0.5 font-mono text-zinc-300">
+                  npm run start
                 </code>
-                . See the{" "}
+                ). See the{" "}
                 <a
-                  href={SOLO_GUIDE}
+                  href={HEDERA_LOCAL_NODE_README}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-[#e8d5a3] underline decoration-[#c9a227]/40 underline-offset-2 hover:decoration-[#c9a227]"
                 >
-                  Solo user guide
+                  Hiero Local Node README
                 </a>
                 .
               </>
@@ -165,7 +197,7 @@ export function DashboardView({
           </p>
           <div className="overflow-hidden rounded-2xl border border-white/[0.08] bg-[#121218]/80 shadow-[0_0_0_1px_rgba(255,255,255,0.03)_inset]">
             <iframe
-              title="Hiero Solo Explorer"
+              title="Hedera local mirror explorer"
               src={hederaExplorerUrl}
               className="h-[min(78vh,900px)] w-full bg-zinc-950"
               referrerPolicy="no-referrer-when-downgrade"
@@ -230,6 +262,13 @@ export function DashboardView({
               </h2>
               <p className="mt-1 text-xs text-zinc-500">
                 States and billing counters from the orchestrator store.
+                {onSelectPipeline ? (
+                  <>
+                    {" "}
+                    Click a row for config, session metadata, recent activity,
+                    and Naryo payloads.
+                  </>
+                ) : null}
               </p>
               <div className="mt-5 overflow-x-auto">
                 <table className="w-full min-w-[640px] text-left text-sm">
@@ -248,7 +287,40 @@ export function DashboardView({
                   <tbody className="divide-y divide-white/[0.04]">
                     {data?.pipelines?.length ? (
                       data.pipelines.map((p) => (
-                        <tr key={p.id} className="text-zinc-300">
+                        <tr
+                          key={p.id}
+                          className={`text-zinc-300 ${
+                            onSelectPipeline
+                              ? "cursor-pointer transition-colors hover:bg-white/[0.04] focus-within:bg-white/[0.04]"
+                              : ""
+                          } ${
+                            selectedPipelineId === p.id
+                              ? "bg-white/[0.07]"
+                              : ""
+                          }`}
+                          onClick={
+                            onSelectPipeline
+                              ? () => onSelectPipeline(p.id)
+                              : undefined
+                          }
+                          onKeyDown={
+                            onSelectPipeline
+                              ? (e) => {
+                                  if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    onSelectPipeline(p.id);
+                                  }
+                                }
+                              : undefined
+                          }
+                          tabIndex={onSelectPipeline ? 0 : undefined}
+                          role={onSelectPipeline ? "button" : undefined}
+                          aria-label={
+                            onSelectPipeline
+                              ? `Open details for pipeline ${p.id}`
+                              : undefined
+                          }
+                        >
                           <td className="py-3 pr-4 font-mono text-xs text-zinc-400">
                             {p.id}
                           </td>
@@ -293,6 +365,159 @@ export function DashboardView({
                   </tbody>
                 </table>
               </div>
+
+              {selectedPipelineId && onSelectPipeline ? (
+                <div className="mt-6 rounded-xl border border-[#c9a227]/25 bg-black/25 p-5">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="font-display text-base font-medium text-zinc-100">
+                        Pipeline detail
+                      </h3>
+                      <p className="mt-1 font-mono text-xs text-zinc-500">
+                        {selectedPipelineId}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onSelectPipeline(null)}
+                      className="rounded-lg border border-white/[0.12] bg-white/[0.06] px-3 py-1.5 text-sm text-zinc-200 hover:bg-white/[0.1]"
+                    >
+                      Close
+                    </button>
+                  </div>
+
+                  {pipelineDetailLoading && !pipelineDetail ? (
+                    <p className="mt-4 text-sm text-zinc-500">Loading…</p>
+                  ) : null}
+                  {pipelineDetailErr ? (
+                    <p className="mt-4 text-sm text-rose-200/90">
+                      {pipelineDetailErr}
+                    </p>
+                  ) : null}
+
+                  {pipelineDetail ? (
+                    <div className="mt-5 grid gap-6 lg:grid-cols-2">
+                      <div className="space-y-4">
+                        <div>
+                          <h4 className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+                            Metadata
+                          </h4>
+                          <p className="mt-2 text-xs text-zinc-600">
+                            Session fields (billing, lifecycle, rates). Config
+                            patches are shown separately.
+                          </p>
+                          {pipelineDetail.prepaidBalanceUnits != null ? (
+                            <p className="mt-2 font-mono text-xs text-zinc-400">
+                              prepaidBalanceUnits:{" "}
+                              {pipelineDetail.prepaidBalanceUnits}
+                            </p>
+                          ) : null}
+                          <div className="mt-2">
+                            <JsonBlock
+                              value={sessionMetadata(pipelineDetail.session)}
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <h4 className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+                            Config
+                          </h4>
+                          <p className="mt-2 text-xs text-zinc-600">
+                            Merged <code className="font-mono text-zinc-500">reconfigure</code>{" "}
+                            payload (empty until patched).
+                          </p>
+                          <div className="mt-2">
+                            <JsonBlock
+                              value={
+                                pipelineDetail.session.config &&
+                                Object.keys(pipelineDetail.session.config).length > 0
+                                  ? pipelineDetail.session.config
+                                  : {}
+                              }
+                            />
+                          </div>
+                        </div>
+                      </div>
+                      <div className="space-y-6">
+                        <div>
+                          <h4 className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+                            Recent activity
+                          </h4>
+                          <p className="mt-2 text-xs text-zinc-600">
+                            Newest first for this session only.
+                          </p>
+                          <ul className="mt-3 max-h-56 space-y-2 overflow-y-auto pr-1 font-mono text-xs leading-relaxed">
+                            {pipelineDetail.recentActivity?.length ? (
+                              pipelineDetail.recentActivity.map((a, i) => (
+                                <li
+                                  key={`${a.timestamp}-${a.type}-${i}`}
+                                  className="rounded-lg border border-white/[0.04] bg-black/20 px-3 py-2"
+                                >
+                                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                                    <span className="text-[#e8d5a3]">
+                                      {a.type}
+                                    </span>
+                                    <span className="text-zinc-600">
+                                      {formatTime(a.timestamp)}
+                                    </span>
+                                  </div>
+                                  {a.data &&
+                                  Object.keys(a.data).length > 0 ? (
+                                    <pre className="mt-1 overflow-x-auto text-[11px] text-zinc-500">
+                                      {JSON.stringify(a.data, null, 2)}
+                                    </pre>
+                                  ) : null}
+                                </li>
+                              ))
+                            ) : (
+                              <li className="text-zinc-600">
+                                No activity for this session in the ring buffer.
+                              </li>
+                            )}
+                          </ul>
+                        </div>
+                        <div>
+                          <h4 className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+                            Recent Naryo data
+                          </h4>
+                          <p className="mt-2 text-xs text-zinc-600">
+                            Inbound webhook payloads (most recent first).
+                          </p>
+                          <ul className="mt-3 max-h-56 space-y-2 overflow-y-auto pr-1 font-mono text-xs">
+                            {pipelineDetail.recentNaryoEvents?.length ? (
+                              [...pipelineDetail.recentNaryoEvents]
+                                .reverse()
+                                .map((ev) => (
+                                  <li
+                                    key={ev.eventId}
+                                    className="rounded-lg border border-white/[0.04] bg-black/20 px-3 py-2"
+                                  >
+                                    <div className="flex flex-wrap justify-between gap-2 text-zinc-400">
+                                      <span>{ev.eventId}</span>
+                                      <span className="text-zinc-600">
+                                        {formatTime(ev.receivedAt)}
+                                      </span>
+                                    </div>
+                                    {ev.payload &&
+                                    Object.keys(ev.payload).length > 0 ? (
+                                      <pre className="mt-1 overflow-x-auto text-[11px] text-zinc-500">
+                                        {JSON.stringify(ev.payload, null, 2)}
+                                      </pre>
+                                    ) : null}
+                                  </li>
+                                ))
+                            ) : (
+                              <li className="text-zinc-600">
+                                No Naryo events stored for this session.
+                              </li>
+                            )}
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </section>
 
             <section className="rounded-2xl border border-white/[0.07] bg-[#121218]/80 p-6 shadow-[0_0_0_1px_rgba(255,255,255,0.03)_inset]">

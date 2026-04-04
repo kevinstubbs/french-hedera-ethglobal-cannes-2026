@@ -97,6 +97,9 @@ func (mockNaryo) EnsurePipeline(ctx context.Context, sessionID string) (string, 
 func (mockNaryo) PauseEgress(ctx context.Context, sessionID string) error   { return nil }
 func (mockNaryo) ResumeEgress(ctx context.Context, sessionID string) error { return nil }
 func (mockNaryo) StopPipeline(ctx context.Context, sessionID string) error  { return nil }
+func (mockNaryo) Stats() map[string]any {
+	return map[string]any{"mode": "mockNaryo"}
+}
 
 func TestPrepaidMinuteCharge(t *testing.T) {
 	ctx := context.Background()

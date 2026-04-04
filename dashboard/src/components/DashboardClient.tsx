@@ -2,17 +2,26 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { DashboardView, type MainTab } from "@/components/DashboardView";
-import type { Summary } from "@/lib/types";
+import type { PipelineDetailResponse, Summary } from "@/lib/types";
 
 export function DashboardClient() {
   const [tab, setTab] = useState<MainTab>("observability");
   const [data, setData] = useState<Summary | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(
+    null,
+  );
+  const [pipelineDetail, setPipelineDetail] =
+    useState<PipelineDetailResponse | null>(null);
+  const [pipelineDetailLoading, setPipelineDetailLoading] = useState(false);
+  const [pipelineDetailErr, setPipelineDetailErr] = useState<string | null>(
+    null,
+  );
 
   const hederaExplorerUrl = useMemo(
     () =>
-      (process.env.NEXT_PUBLIC_HEDERA_EXPLORER_URL || "http://localhost:8080").replace(
+      (process.env.NEXT_PUBLIC_HEDERA_EXPLORER_URL || "http://localhost:8090").replace(
         /\/$/,
         "",
       ),
@@ -48,6 +57,51 @@ export function DashboardClient() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!selectedPipelineId) {
+      setPipelineDetail(null);
+      setPipelineDetailErr(null);
+      setPipelineDetailLoading(false);
+      return;
+    }
+    const pipelineId = selectedPipelineId;
+    setPipelineDetail(null);
+    setPipelineDetailErr(null);
+    let stop = false;
+    setPipelineDetailLoading(true);
+    async function pullDetail() {
+      try {
+        const r = await fetch(
+          `/api/backend/pipelines/${encodeURIComponent(pipelineId)}`,
+          { cache: "no-store" },
+        );
+        const j = (await r.json()) as PipelineDetailResponse & {
+          error?: string;
+        };
+        if (!r.ok) {
+          throw new Error(j.error || `HTTP ${r.status}`);
+        }
+        if (!stop) {
+          setPipelineDetail(j as PipelineDetailResponse);
+        }
+      } catch (e) {
+        if (!stop) {
+          setPipelineDetailErr(
+            e instanceof Error ? e.message : String(e),
+          );
+        }
+      } finally {
+        if (!stop) {
+          setPipelineDetailLoading(false);
+        }
+      }
+    }
+    void pullDetail();
+    return () => {
+      stop = true;
+    };
+  }, [selectedPipelineId]);
+
   return (
     <DashboardView
       tab={tab}
@@ -56,6 +110,11 @@ export function DashboardClient() {
       err={err}
       data={data}
       hederaExplorerUrl={hederaExplorerUrl}
+      selectedPipelineId={selectedPipelineId}
+      onSelectPipeline={setSelectedPipelineId}
+      pipelineDetail={pipelineDetail}
+      pipelineDetailLoading={pipelineDetailLoading}
+      pipelineDetailErr={pipelineDetailErr}
     />
   );
 }

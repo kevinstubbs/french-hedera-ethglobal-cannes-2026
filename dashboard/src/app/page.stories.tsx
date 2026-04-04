@@ -1,15 +1,42 @@
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { DashboardView, type MainTab } from "@/components/DashboardView";
-import { mockSummaryLoaded } from "@/lib/mockSummary";
-import type { Summary } from "@/lib/types";
+import {
+  mockPipelineDetailSess8f2a1c,
+  mockSummaryLoaded,
+} from "@/lib/mockSummary";
+import type { PipelineDetailResponse, Summary } from "@/lib/types";
 
 function HomePagePreview(props: {
   loading: boolean;
   err: string | null;
   data: Summary | null;
+  initialSelectedPipelineId?: string | null;
 }) {
   const [tab, setTab] = useState<MainTab>("observability");
+  const [selectedId, setSelectedId] = useState<string | null>(
+    props.initialSelectedPipelineId ?? null,
+  );
+  const pipelineDetail = useMemo((): PipelineDetailResponse | null => {
+    if (!selectedId) return null;
+    if (selectedId === "sess-8f2a1c") return mockPipelineDetailSess8f2a1c;
+    const row = props.data?.pipelines?.find((p) => p.id === selectedId);
+    if (!row) return null;
+    return {
+      session: {
+        id: row.id,
+        agentId: row.agentId,
+        state: row.state,
+        paymentStreamActive: row.paymentStreamActive,
+        billedSeconds: row.billedSeconds,
+        rateCentsPerSecond: row.rateCentsPerSecond,
+        lastNaryoOpId: row.lastNaryoOpId,
+        config: row.config,
+      },
+      recentActivity: [],
+      recentNaryoEvents: [],
+    };
+  }, [selectedId, props.data]);
   return (
     <div className="relative min-h-screen overflow-hidden">
       <div
@@ -30,6 +57,11 @@ function HomePagePreview(props: {
           err={props.err}
           data={props.data}
           hederaExplorerUrl="about:blank"
+          selectedPipelineId={selectedId}
+          onSelectPipeline={setSelectedId}
+          pipelineDetail={pipelineDetail}
+          pipelineDetailLoading={false}
+          pipelineDetailErr={null}
         />
       </div>
     </div>
@@ -50,6 +82,17 @@ type Story = StoryObj<typeof meta>;
 export const DefaultWithMockData: Story = {
   render: () => (
     <HomePagePreview
+      loading={false}
+      err={null}
+      data={mockSummaryLoaded}
+    />
+  ),
+};
+
+export const PipelineSelected: Story = {
+  render: () => (
+    <HomePagePreview
+      initialSelectedPipelineId="sess-8f2a1c"
       loading={false}
       err={null}
       data={mockSummaryLoaded}

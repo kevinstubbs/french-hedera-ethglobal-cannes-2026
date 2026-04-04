@@ -35,7 +35,7 @@ cd deploy/naryo-verify && docker compose up -d
 python3 verify_naryo_api.py
 ```
 
-The stack runs **Anvil** (Ethereum) in Compose and points **Hedera** at your **Solo** mirror on the host (`HEDERA_MIRROR_URL`, default `http://host.docker.internal:5551`). See [NARYO_VERIFY.md](./NARYO_VERIFY.md) for ports and env vars.
+The stack runs **Anvil** (Ethereum) in Compose and points **Hedera** at a **local mirror REST** URL on the host (`HEDERA_MIRROR_URL`, default `http://host.docker.internal:5551`), matching **[hedera-local-node](../hedera-local-node/README.md)** mirror port **5551** when that stack runs on the host. See [NARYO_VERIFY.md](./NARYO_VERIFY.md) for ports and env vars.
 
 See [NARYO_VERIFY.md](./NARYO_VERIFY.md) for scope (Ethereum baseline `PUT` cycle, broadcaster-config + `ALL` broadcasters; filter `POST` skipped on the tested image; declarative Hedera filter in `application.yml`).
 
@@ -83,10 +83,12 @@ While a pipeline is **running** with an active payment stream, the server:
 |----------|---------|
 | `PREPAID_RATE_UNITS_PER_MINUTE` | Units debited per minute while running (default **60** if unset). |
 | `PREPAID_DEV_AUTO_CREDIT_UNITS` | **Local demo only:** credit this many units to the agent on `POST /v1/pipelines` create. |
-| `HEDERA_NETWORK` | `testnet` (default), `mainnet`, or `previewnet` for the live SDK client. |
+| `HEDERA_NETWORK` | `testnet` (default), `mainnet`, `previewnet`, or **`local`** for Hiero SDK `ClientForName("local")` (typical with **hedera-local-node**; see **`cmd/hcs-demo-activity`**). |
 | `HEDERA_ENABLED` | `true` / `1` to force-enable Hedera client wiring (optional; auto if operator + topic set). |
 | `HEDERA_OPERATOR_ID` | Operator account id for topic submit + record queries. |
 | `HEDERA_OPERATOR_KEY` | Operator private key (DER or hex string). |
+
+**Local network (hedera-local-node):** use the relay operator from **`hedera-local-node/.env`** — set `HEDERA_OPERATOR_ID` to **`RELAY_OPERATOR_ID_MAIN`** (typically `0.0.2`) and `HEDERA_OPERATOR_KEY` to **`RELAY_OPERATOR_KEY_MAIN`** (DER hex string). Consensus node account **`0.0.3`** in that file is the **node** id for gRPC maps, not the signing operator.
 | `HEDERA_SERVICE_ACCOUNT_ID` | Expected **recipient** of deposit transfers for `VerifyTopupTx`. |
 | `HEDERA_AUDIT_TOPIC_ID` | HCS topic id; envelope JSON is submitted asynchronously (best-effort). |
 | `HEDERA_SUMMARY_WINDOW_MINUTES` | Billing summary batch window (clamped **5–15**). |
@@ -142,21 +144,21 @@ npm install
 npm run dev
 ```
 
-Open **http://localhost:3000**. The UI polls the Go API via a Next.js route handler (no browser CORS to the API). Use the **Hedera** tab to embed the Solo Explorer UI in an iframe when you run a local network.
+Open **http://localhost:3000**. The UI polls the Go API via a Next.js route handler (no browser CORS to the API). Use the **Hedera** tab to embed the **Hedera Local Node** mirror explorer in an iframe when you run a local network.
 
-### Local Hedera with Solo
+### Local Hedera (hedera-local-node)
 
-Deploy a local Hiero/Hedera stack (Explorer UI on **http://localhost:8080** by default) as described in the [Solo user guide](https://solo.hiero.org/v0.60.0/docs/solo-user-guide/):
-
-```bash
-solo one-shot single deploy
-```
-
-Teardown when finished:
+This repository vendors **[hedera-local-node](../hedera-local-node/README.md)** (Hiero / Hashgraph local consensus + mirror). From that directory:
 
 ```bash
-solo one-shot single destroy
+cd hedera-local-node
+npm install
+npm run start
 ```
+
+Mirror REST (and Naryo’s `HEDERA_MIRROR_URL` toward the host) is typically **`http://127.0.0.1:5551`**. The bundled Explorer UI defaults to **`http://localhost:8090`** (set `NEXT_PUBLIC_HEDERA_EXPLORER_URL` in the dashboard if yours differs).
+
+Stop the network from the same directory (see upstream README for `npm run stop` / CLI options).
 
 ### Environment
 
@@ -165,7 +167,7 @@ Copy `dashboard/.env.example` to `dashboard/.env.local` if needed:
 | Variable | Purpose |
 |----------|---------|
 | `API_BASE_URL` | Base URL of the Go API **without** a trailing slash (default `http://127.0.0.1:8080`). |
-| `NEXT_PUBLIC_HEDERA_EXPLORER_URL` | URL of the Explorer UI for the **Hedera** tab iframe (default `http://localhost:8080`). |
+| `NEXT_PUBLIC_HEDERA_EXPLORER_URL` | URL of the Explorer UI for the **Hedera** tab iframe (default `http://localhost:8090` for hedera-local-node). |
 
 Production build:
 
@@ -174,6 +176,51 @@ cd dashboard
 npm run build
 npm start
 ```
+
+## Demo and e2e scripts
+
+### Hedera HCS traffic (Naryo mirror demos)
+
+[`cmd/hcs-demo-activity`](../cmd/hcs-demo-activity/main.go) submits JSON messages to an HCS topic on a loop so **Naryo** (Hedera mirror node in `deploy/naryo-verify`) can index **transactions** for that topic when **`LOCAL_NODE_HCS_TOPIC_ID`** (or legacy `SOLO_HCS_TOPIC_ID`) matches the same `0.0.n` topic in compose.
+
+From the repo root (with **hedera-local-node** or public-network credentials and a topic id):
+
+```bash
+# Operator + key: copy from hedera-local-node/.env → RELAY_OPERATOR_ID_MAIN / RELAY_OPERATOR_KEY_MAIN
+export HEDERA_OPERATOR_ID=0.0.2
+export HEDERA_OPERATOR_KEY=302e020100300506032b657004220420...
+export HEDERA_NETWORK=local   # or testnet / mainnet / previewnet
+export HEDERA_LOCAL_PLAINTEXT=1   # typical for local-node gRPC (plaintext to consensus node)
+go run ./cmd/hcs-demo-activity -topic 0.0.y -interval 5s
+```
+
+One-shot:
+
+```bash
+go run ./cmd/hcs-demo-activity -once -topic 0.0.y
+```
+
+The topic id must **already exist** on that ledger (arbitrary ids like `0.0.123` fail with `INVALID_TOPIC_ID` until created). Create one, then reuse its id:
+
+```bash
+cd cmd/hcs-demo-activity
+go run . -create-topic
+go run . -topic 0.0.<printed> -interval 5s
+```
+
+Topic resolution: `-topic`, then `HEDERA_HCS_TOPIC_ID`, `LOCAL_NODE_HCS_TOPIC_ID`, `SOLO_HCS_TOPIC_ID` (deprecated alias), `HEDERA_AUDIT_TOPIC_ID`. Override local node addresses with `HEDERA_LOCAL_GRPC`, `HEDERA_LOCAL_NODE_ACCOUNT_ID` (often **`0.0.3`** for hedera-local-node’s consensus node), `HEDERA_LOCAL_MIRROR` (comma-separated).
+
+The command loads **`.env`** from the current directory (and **`cmd/hcs-demo-activity/.env`** when you run from the repo root). It also accepts **`RELAY_OPERATOR_ID_MAIN` / `RELAY_OPERATOR_KEY_MAIN`** if you copied **`hedera-local-node/.env`**. If you use **`source .env`** in bash, use **`export VAR=...`** lines or **`set -a && source .env && set +a`**, or `go run` will not inherit unexported variables.
+
+### Pipeline e2e (x402 + ingest)
+
+[`scripts/e2e-pipeline.sh`](../scripts/e2e-pipeline.sh) runs Go tests that spin up the HTTP stack with a **mock x402 facilitator** (auto-pay), create/start pipeline, POST a synthetic Naryo webhook, and assert `recentNaryoEvents` on status (including a **prepaid ledger + top-up + start** variant).
+
+```bash
+./scripts/e2e-pipeline.sh
+```
+
+Same tests run under `make test-full` (no `-short`) as part of `./internal/http`.
 
 ## Typical two-terminal workflow
 

@@ -14,9 +14,9 @@ import (
 	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/billing"
 	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/config"
 	hcslog "github.com/french-hedera-ethglobal-cannes2026/submission/internal/hcs"
+	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/hedera"
 	httpapi "github.com/french-hedera-ethglobal-cannes2026/submission/internal/http"
 	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/http/middleware"
-	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/hedera"
 	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/ledger"
 	pipelinemcp "github.com/french-hedera-ethglobal-cannes2026/submission/internal/mcp"
 	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/naryo"
@@ -34,7 +34,7 @@ func main() {
 	})
 
 	store := pipeline.NewMemoryStore()
-	naryoClient := &naryo.MockClient{}
+	naryoClient := naryo.NewFromEnv()
 	hedCli := hedera.NewClientFromConfig(hedCfg)
 
 	var hcsOpts []hcslog.LoggerOption
@@ -69,6 +69,7 @@ func main() {
 	root := http.NewServeMux()
 	root.HandleFunc("GET /healthz", api.Health)
 	root.HandleFunc("GET /observability/v1/summary", httpapi.ObservabilitySummary(obs))
+	root.HandleFunc("GET /observability/v1/pipelines/{id}", httpapi.ObservabilityPipelineDetail(obs))
 	httpapi.RegisterInternalRoutes(root, api)
 	root.Handle("/v1/", guarded)
 	root.Handle("/mcp", pipelinemcp.StreamableHTTPHandler(svc))

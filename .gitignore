@@ -1,1 +1,3 @@
 hedera-local-node
+.env*
+!.env.example

@@ -48,8 +48,11 @@ func newTestStackWith(t *testing.T, cfg stackConfig) (*httptest.Server, *http.Cl
 	mux := NewMux(api)
 	gate := middleware.PaymentGate(xcfg, fac, true)(mux)
 
+	obs := &ObservabilityDeps{Svc: svc, Naryo: nm}
 	root := http.NewServeMux()
 	root.HandleFunc("GET /healthz", api.Health)
+	root.HandleFunc("GET /observability/v1/summary", ObservabilitySummary(obs))
+	root.HandleFunc("GET /observability/v1/pipelines/{id}", ObservabilityPipelineDetail(obs))
 	RegisterInternalRoutes(root, api)
 	root.Handle("/v1/", gate)
 
@@ -73,6 +76,55 @@ func TestHealthzUnprotected(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d", resp.StatusCode)
+	}
+}
+
+func TestObservabilityPipelineDetail(t *testing.T) {
+	ts, client, _ := newTestStack(t)
+	resp, err := client.Post(ts.URL+"/v1/pipelines", "application/json", strings.NewReader(`{"agentId":"obs-test"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cr struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
+		_ = resp.Body.Close()
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated || cr.ID == "" {
+		t.Fatalf("create pipeline: status %d id %q", resp.StatusCode, cr.ID)
+	}
+
+	notFound, err := http.Get(ts.URL + "/observability/v1/pipelines/does-not-exist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = notFound.Body.Close()
+	if notFound.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 missing pipeline, got %d", notFound.StatusCode)
+	}
+
+	detail, err := http.Get(ts.URL + "/observability/v1/pipelines/" + cr.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer detail.Body.Close()
+	if detail.StatusCode != http.StatusOK {
+		t.Fatalf("detail: status %d", detail.StatusCode)
+	}
+	var body struct {
+		Session map[string]any `json:"session"`
+	}
+	if err := json.NewDecoder(detail.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Session == nil {
+		t.Fatal("expected session object")
+	}
+	if got, _ := body.Session["id"].(string); got != cr.ID {
+		t.Fatalf("session.id: want %q got %q", cr.ID, got)
 	}
 }
 
@@ -425,5 +477,95 @@ func TestE2E_CreateStartNaryoIngestStatus(t *testing.T) {
 	_ = json.NewDecoder(ing2.Body).Decode(&ingJSON)
 	if ingJSON["duplicate"] != true {
 		t.Fatalf("expected duplicate true, got %#v", ingJSON)
+	}
+}
+
+// TestE2E_FullPrepaidAndX402Flow exercises prepaid ledger enforcement, x402-gated top-up, then
+// start, Naryo ingest, and status (same as production shape; mock facilitator auto-pays 402s).
+func TestE2E_FullPrepaidAndX402Flow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e: run without -short")
+	}
+	t.Setenv("PREPAID_DEV_AUTO_CREDIT_UNITS", "0")
+	ts, client, _, _ := newTestStackWith(t, stackConfig{WithLedger: true})
+
+	resp, err := client.Post(ts.URL+"/v1/pipelines", "application/json", strings.NewReader(`{"agentId":"e2e-ledger"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("create pipeline: %d %s", resp.StatusCode, string(b))
+	}
+	var cr struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
+		t.Fatal(err)
+	}
+	if cr.ID == "" {
+		t.Fatal("no session id")
+	}
+
+	badStart, err := client.Post(ts.URL+"/v1/pipelines/"+cr.ID+"/start", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = badStart.Body.Close()
+	if badStart.StatusCode != http.StatusConflict {
+		t.Fatalf("start without prepaid: expected 409, got %d", badStart.StatusCode)
+	}
+
+	tu, err := client.Post(ts.URL+"/v1/agents/e2e-ledger/topup/x402", "application/json",
+		strings.NewReader(`{"amountUnits":10000,"idempotencyKey":"e2e-ledger-topup-1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tu.Body.Close()
+	if tu.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(tu.Body)
+		t.Fatalf("topup x402: %d %s", tu.StatusCode, string(b))
+	}
+
+	sr, err := client.Post(ts.URL+"/v1/pipelines/"+cr.ID+"/start", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sr.Body.Close()
+	if sr.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(sr.Body)
+		t.Fatalf("start: %d %s", sr.StatusCode, string(b))
+	}
+
+	ingBody := `{"sessionId":"` + cr.ID + `","eventId":"evt-ledger-1","payload":{"source":"e2e","demo":true}}`
+	ir, err := http.NewRequest(http.MethodPost, ts.URL+"/internal/naryo/v1/events", strings.NewReader(ingBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ir.Header.Set("Content-Type", "application/json")
+	ir.Header.Set("X-Naryo-Webhook-Secret", "test-naryo-secret")
+	ingResp, err := ts.Client().Do(ir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ingResp.Body.Close()
+	if ingResp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(ingResp.Body)
+		t.Fatalf("ingest: %d %s", ingResp.StatusCode, string(b))
+	}
+
+	st, err := client.Get(ts.URL + "/v1/pipelines/" + cr.ID + "/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Body.Close()
+	var status map[string]any
+	if err := json.NewDecoder(st.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	evs, ok := status["recentNaryoEvents"].([]any)
+	if !ok || len(evs) != 1 {
+		t.Fatalf("expected one recentNaryoEvents, got %#v", status["recentNaryoEvents"])
 	}
 }

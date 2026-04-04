@@ -3,7 +3,7 @@
 Proves Naryo Configuration API CRUD + /api/v1/operations/{id} polling.
 
 Uses the Ethereum (Anvil) baseline node id from application.yml (see docs/NARYO_VERIFY.md).
-Hedera (Solo) is configured there too for multi-chain baseline. Creating extra nodes via POST
+Hedera (local mirror / hedera-local-node) is configured there too for multi-chain baseline. Creating extra nodes via POST
 often requires a matching store configuration; this script exercises node *updates*
 (PUT + prevItemHash) on the Ethereum baseline only.
 

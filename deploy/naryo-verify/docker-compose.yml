@@ -47,10 +47,11 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      # Solo mirror REST base URL as seen from the Naryo container (host gateway).
+      # hedera-local-node mirror REST as seen from the Naryo container (host gateway; default port 5551).
       HEDERA_MIRROR_URL: ${HEDERA_MIRROR_URL:-http://host.docker.internal:5551}
-      # Optional: Hedera topic id (0.0.x) for the declarative TRANSACTION filter in application.yml.
-      SOLO_HCS_TOPIC_ID: ${SOLO_HCS_TOPIC_ID:-0.0.0}
+      # HCS topic id (0.0.x) for the declarative TRANSACTION filter in application.yml.
+      # SOLO_HCS_TOPIC_ID is a deprecated alias if LOCAL_NODE_HCS_TOPIC_ID is unset.
+      LOCAL_NODE_HCS_TOPIC_ID: ${LOCAL_NODE_HCS_TOPIC_ID:-${SOLO_HCS_TOPIC_ID:-0.0.0}}
     depends_on:
       anvil:
         condition: service_healthy

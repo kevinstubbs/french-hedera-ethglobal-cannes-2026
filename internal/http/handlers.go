@@ -86,17 +86,21 @@ func (a *API) GetStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{
-		"id":                  sess.ID,
-		"agentId":             sess.AgentID,
-		"state":               string(sess.State),
-		"billedSeconds":       sess.BilledSeconds,
-		"paymentStreamActive": sess.PaymentStreamActive,
-		"rateCentsPerSecond":  sess.RateCentsPerSecond,
-		"lastNaryoOpId":       sess.LastNaryoOpID,
-		"rateUnitsPerMinute":  sess.RateUnitsPerMinute,
-		"chargedUnits":        sess.ChargedUnits,
+		"id":                   sess.ID,
+		"agentId":              sess.AgentID,
+		"state":                string(sess.State),
+		"billedSeconds":        sess.BilledSeconds,
+		"paymentStreamActive":  sess.PaymentStreamActive,
+		"rateCentsPerSecond":   sess.RateCentsPerSecond,
+		"lastNaryoOpId":        sess.LastNaryoOpID,
+		"config":               map[string]any{},
+		"rateUnitsPerMinute":   sess.RateUnitsPerMinute,
+		"chargedUnits":         sess.ChargedUnits,
 		"summaryWindowMinutes": sess.SummaryWindowMinutes,
-		"autoPausedForFunds":  sess.AutoPausedForFunds,
+		"autoPausedForFunds":   sess.AutoPausedForFunds,
+	}
+	if len(sess.Config) > 0 {
+		out["config"] = sess.Config
 	}
 	if sess.AgentID != "" {
 		out["prepaidBalanceUnits"] = a.Svc.PrepaidBalance(sess.AgentID)

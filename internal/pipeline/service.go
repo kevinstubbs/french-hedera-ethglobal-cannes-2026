@@ -365,11 +365,26 @@ func (s *Service) Resume(ctx context.Context, id string) error {
 	return nil
 }
 
-// Reconfigure is a placeholder for intent/template updates (Phase 1 no-op beyond HCS).
-func (s *Service) Reconfigure(ctx context.Context, id string, _ map[string]any) error {
-	_, err := s.store.Get(id)
-	if err != nil {
-		return err
+// Reconfigure merges patch into the session config map (shallow per-key) and emits HCS.
+func (s *Service) Reconfigure(ctx context.Context, id string, patch map[string]any) error {
+	if len(patch) == 0 {
+		_, err := s.store.Get(id)
+		if err != nil {
+			return err
+		}
+	} else {
+		err := s.store.Update(id, func(v *Session) (bool, error) {
+			if v.Config == nil {
+				v.Config = make(map[string]any, len(patch))
+			}
+			for k, val := range patch {
+				v.Config[k] = val
+			}
+			return true, nil
+		})
+		if err != nil {
+			return err
+		}
 	}
 	s.recordActivity("pipeline_reconfigured", id, map[string]any{"phase": 1})
 	if s.hcs != nil {
@@ -420,6 +435,28 @@ func (s *Service) ActivityFeed(limit int) []ActivityEntry {
 		return nil
 	}
 	return s.activity.Snapshot(limit)
+}
+
+// ActivityForSession returns recent activity rows for one session (newest first).
+func (s *Service) ActivityForSession(sessionID string, limit int) []ActivityEntry {
+	if s == nil || s.activity == nil || sessionID == "" {
+		return nil
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	const capScan = 512
+	all := s.activity.Snapshot(capScan)
+	out := make([]ActivityEntry, 0, limit)
+	for _, e := range all {
+		if e.SessionID == sessionID {
+			out = append(out, e)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out
 }
 
 // RunBillingLoop runs billing ticks every interval until ctx is cancelled.
