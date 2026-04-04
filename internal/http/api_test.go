@@ -1,35 +1,66 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	x402 "github.com/coinbase/x402/go"
+
+	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/config"
 	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/http/middleware"
+	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/ledger"
 	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/naryo"
 	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/pipeline"
 	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/x402test"
 )
 
-func newTestStack(t *testing.T) (*httptest.Server, *http.Client, *pipeline.Service) {
+type stackConfig struct {
+	Facilitator x402.FacilitatorClient
+	WithLedger  bool
+	HederaCfg   config.Hedera
+}
+
+func newTestStackWith(t *testing.T, cfg stackConfig) (*httptest.Server, *http.Client, *pipeline.Service, *naryo.MockClient) {
 	t.Helper()
+	t.Setenv("NARYO_INGEST_SECRET", "test-naryo-secret")
+
 	xcfg := x402test.TestX402Config()
+	fac := cfg.Facilitator
+	if fac == nil {
+		fac = x402test.MockFacilitator{}
+	}
+	nm := &naryo.MockClient{}
 	store := pipeline.NewMemoryStore()
-	svc := pipeline.NewService(store, &naryo.MockClient{}, nil, 1, nil)
-	api := &API{Svc: svc}
+	var opts []pipeline.ServiceOption
+	if cfg.WithLedger {
+		opts = append(opts, pipeline.WithPrepaidLedger(ledger.NewMemoryLedger()))
+	}
+	svc := pipeline.NewService(store, nm, nil, 1, nil, opts...)
+	api := &API{Svc: svc, HederaCfg: cfg.HederaCfg}
 	mux := NewMux(api)
-	gate := middleware.PaymentGate(xcfg, x402test.MockFacilitator{}, true)(mux)
+	gate := middleware.PaymentGate(xcfg, fac, true)(mux)
 
 	root := http.NewServeMux()
 	root.HandleFunc("GET /healthz", api.Health)
+	RegisterInternalRoutes(root, api)
 	root.Handle("/v1/", gate)
 
 	ts := httptest.NewServer(root)
 	t.Cleanup(ts.Close)
 	c := &http.Client{Transport: &x402test.AutoPayTransport{Base: http.DefaultTransport}}
+	return ts, c, svc, nm
+}
+
+func newTestStack(t *testing.T) (*httptest.Server, *http.Client, *pipeline.Service) {
+	ts, c, svc, _ := newTestStackWith(t, stackConfig{})
 	return ts, c, svc
 }
 
@@ -42,6 +73,66 @@ func TestHealthzUnprotected(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d", resp.StatusCode)
+	}
+}
+
+func TestGetStatusDoesNotRequirePayment(t *testing.T) {
+	ts, _, _ := newTestStack(t)
+	client := ts.Client()
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/v1/pipelines/missing/status", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 without payment, got %d", resp.StatusCode)
+	}
+}
+
+func TestAllPipelineX402RoutesRequirePaymentWithoutAutoPay(t *testing.T) {
+	ts, _, _, _ := newTestStackWith(t, stackConfig{})
+	client := ts.Client()
+	pid := "deadbeef"
+	agent := "agent1"
+
+	tests := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodPost, "/v1/pipelines", `{}`},
+		{http.MethodPost, "/v1/pipelines/" + pid + "/start", `{}`},
+		{http.MethodPost, "/v1/pipelines/" + pid + "/stop", `{}`},
+		{http.MethodPost, "/v1/pipelines/" + pid + "/pause", `{}`},
+		{http.MethodPost, "/v1/pipelines/" + pid + "/resume", `{}`},
+		{http.MethodPut, "/v1/pipelines/" + pid + "/reconfigure", `{"patch":{}}`},
+		{http.MethodPut, "/v1/pipelines/" + pid + "/payment-stream", `{"active":true}`},
+		{http.MethodPost, "/v1/agents/" + agent + "/topup/x402", `{"amountUnits":10,"idempotencyKey":"k1"}`},
+		{http.MethodPost, "/v1/agents/" + agent + "/topup/deposit", `{"transactionId":"0.0.1","amountUnits":10}`},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.method+"_"+tc.path, func(t *testing.T) {
+			req, err := http.NewRequest(tc.method, ts.URL+tc.path, strings.NewReader(tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json")
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusPaymentRequired {
+				t.Fatalf("expected 402, got %d body=%s", resp.StatusCode, string(body))
+			}
+		})
 	}
 }
 
@@ -62,6 +153,53 @@ func TestCreatePipelineRequiresPayment(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusPaymentRequired {
 		t.Fatalf("expected 402, got %d body=%s", resp.StatusCode, string(body))
+	}
+}
+
+func TestMalformedPaymentSignatureRejected(t *testing.T) {
+	ts, _, _, _ := newTestStackWith(t, stackConfig{})
+	client := ts.Client()
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/pipelines", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("PAYMENT-SIGNATURE", "not-valid-base64!!!")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusOK {
+		t.Fatalf("unexpected success status %d", resp.StatusCode)
+	}
+}
+
+func TestPaymentRejectedWhenFacilitatorVerifyInvalid(t *testing.T) {
+	ts, _, _, _ := newTestStackWith(t, stackConfig{Facilitator: x402test.RejectVerifyFacilitator{}})
+	client := &http.Client{Transport: &x402test.AutoPayTransport{Base: http.DefaultTransport}}
+	resp, err := client.Post(ts.URL+"/v1/pipelines", "application/json", strings.NewReader(`{"agentId":"a1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected create to fail when verify rejects; got %d body=%s", resp.StatusCode, string(body))
+	}
+}
+
+func TestPaymentFailsWhenFacilitatorVerifyErrors(t *testing.T) {
+	ts, _, _, _ := newTestStackWith(t, stackConfig{Facilitator: x402test.ErrorVerifyFacilitator{Err: errors.New("facilitator down")}})
+	client := &http.Client{Transport: &x402test.AutoPayTransport{Base: http.DefaultTransport}}
+	resp, err := client.Post(ts.URL+"/v1/pipelines", "application/json", strings.NewReader(`{"agentId":"a1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusCreated {
+		t.Fatal("expected create to fail when facilitator errors")
 	}
 }
 
@@ -113,5 +251,179 @@ func TestCreateAndStartWithPayment(t *testing.T) {
 	}
 	if status.State != "running" || !status.PaymentStreamActive {
 		t.Fatalf("unexpected status: %+v", status)
+	}
+}
+
+func TestStopPauseResumeReconfigurePaymentStreamWithPayment(t *testing.T) {
+	ts, client, _, _ := newTestStackWith(t, stackConfig{})
+	resp, err := client.Post(ts.URL+"/v1/pipelines", "application/json", strings.NewReader(`{"agentId":"a1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cr struct {
+		ID string `json:"id"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&cr)
+	_ = resp.Body.Close()
+	if cr.ID == "" {
+		t.Fatal("no id")
+	}
+	id := cr.ID
+
+	mustOK := func(t *testing.T, method, url string, body string) {
+		t.Helper()
+		req, err := http.NewRequest(method, url, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		r2, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r2.Body.Close()
+		if r2.StatusCode != http.StatusOK {
+			b, _ := io.ReadAll(r2.Body)
+			t.Fatalf("%s %s: %d %s", method, url, r2.StatusCode, string(b))
+		}
+	}
+
+	mustOK(t, http.MethodPost, ts.URL+"/v1/pipelines/"+id+"/start", `{}`)
+	mustOK(t, http.MethodPost, ts.URL+"/v1/pipelines/"+id+"/pause", `{}`)
+	mustOK(t, http.MethodPost, ts.URL+"/v1/pipelines/"+id+"/resume", `{}`)
+	mustOK(t, http.MethodPut, ts.URL+"/v1/pipelines/"+id+"/reconfigure", `{"patch":{"k":1}}`)
+	mustOK(t, http.MethodPut, ts.URL+"/v1/pipelines/"+id+"/payment-stream", `{"active":false}`)
+	mustOK(t, http.MethodPut, ts.URL+"/v1/pipelines/"+id+"/payment-stream", `{"active":true}`)
+	mustOK(t, http.MethodPost, ts.URL+"/v1/pipelines/"+id+"/stop", `{}`)
+}
+
+func TestTopUpX402WithPayment(t *testing.T) {
+	ts, client, _, _ := newTestStackWith(t, stackConfig{WithLedger: true})
+	resp, err := client.Post(ts.URL+"/v1/agents/agent-x/topup/x402", "application/json",
+		strings.NewReader(`{"amountUnits":42,"idempotencyKey":"idem-1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status %d: %s", resp.StatusCode, string(b))
+	}
+}
+
+func TestTopUpDepositWithPaymentSkipVerify(t *testing.T) {
+	ts, client, _, _ := newTestStackWith(t, stackConfig{
+		WithLedger: true,
+		HederaCfg:  config.Hedera{SkipTopupVerify: true},
+	})
+	resp, err := client.Post(ts.URL+"/v1/agents/agent-y/topup/deposit", "application/json",
+		strings.NewReader(`{"transactionId":"0.0.123","amountUnits":7}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status %d: %s", resp.StatusCode, string(b))
+	}
+}
+
+func TestPairwiseAgentControlPlaneHTTP(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns node: run without -short")
+	}
+	ts, _, _, _ := newTestStackWith(t, stackConfig{})
+	agentDir, err := filepath.Abs(filepath.Join("..", "..", "agents", "trading-signal"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	build := exec.Command("npm", "run", "build")
+	build.Dir = agentDir
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Skipf("npm run build in trading-signal failed (skip pairwise): %v\n%s", err, string(out))
+	}
+	script := filepath.Join(agentDir, "scripts", "pairwise-control-plane.mjs")
+	cmd := exec.Command("node", script, ts.URL)
+	cmd.Dir = agentDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("pairwise node script: %v\n%s", err, string(out))
+	}
+	if !bytes.Contains(out, []byte("PAIRWISE_OK")) {
+		t.Fatalf("expected PAIRWISE_OK in output, got: %s", string(out))
+	}
+}
+
+func TestE2E_CreateStartNaryoIngestStatus(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e: run without -short")
+	}
+	ts, client, _, _ := newTestStackWith(t, stackConfig{})
+	resp, err := client.Post(ts.URL+"/v1/pipelines", "application/json", strings.NewReader(`{"agentId":"e2e"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cr struct {
+		ID string `json:"id"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&cr)
+	_ = resp.Body.Close()
+	if cr.ID == "" {
+		t.Fatal("no session id")
+	}
+	sr, err := client.Post(ts.URL+"/v1/pipelines/"+cr.ID+"/start", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = sr.Body.Close()
+	if sr.StatusCode != http.StatusOK {
+		t.Fatalf("start: %d", sr.StatusCode)
+	}
+
+	ingBody := `{"sessionId":"` + cr.ID + `","eventId":"evt-1","payload":{"chain":"test"}}`
+	ir, err := http.NewRequest(http.MethodPost, ts.URL+"/internal/naryo/v1/events", strings.NewReader(ingBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ir.Header.Set("Content-Type", "application/json")
+	ir.Header.Set("X-Naryo-Webhook-Secret", "test-naryo-secret")
+	ingResp, err := ts.Client().Do(ir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ingResp.Body.Close()
+	if ingResp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(ingResp.Body)
+		t.Fatalf("ingest: %d %s", ingResp.StatusCode, string(b))
+	}
+
+	st, err := client.Get(ts.URL + "/v1/pipelines/" + cr.ID + "/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Body.Close()
+	var status map[string]any
+	if err := json.NewDecoder(st.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	evs, ok := status["recentNaryoEvents"].([]any)
+	if !ok || len(evs) != 1 {
+		t.Fatalf("expected one recentNaryoEvents, got %#v", status["recentNaryoEvents"])
+	}
+
+	// Idempotent replay
+	ir2, _ := http.NewRequest(http.MethodPost, ts.URL+"/internal/naryo/v1/events", strings.NewReader(ingBody))
+	ir2.Header.Set("Content-Type", "application/json")
+	ir2.Header.Set("X-Naryo-Webhook-Secret", "test-naryo-secret")
+	ing2, err := ts.Client().Do(ir2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ing2.Body.Close()
+	var ingJSON map[string]any
+	_ = json.NewDecoder(ing2.Body).Decode(&ingJSON)
+	if ingJSON["duplicate"] != true {
+		t.Fatalf("expected duplicate true, got %#v", ingJSON)
 	}
 }

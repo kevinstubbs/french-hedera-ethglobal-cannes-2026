@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 
@@ -35,6 +36,39 @@ func (MockFacilitator) GetSupported(ctx context.Context) (x402.SupportedResponse
 		Extensions: []string{},
 		Signers:    map[string][]string{},
 	}, nil
+}
+
+// RejectVerifyFacilitator verifies all payloads as invalid (payment rejected).
+type RejectVerifyFacilitator struct{}
+
+func (RejectVerifyFacilitator) Verify(ctx context.Context, payloadBytes []byte, requirementsBytes []byte) (*x402.VerifyResponse, error) {
+	return &x402.VerifyResponse{IsValid: false, Payer: ""}, nil
+}
+
+func (RejectVerifyFacilitator) Settle(ctx context.Context, payloadBytes []byte, requirementsBytes []byte) (*x402.SettleResponse, error) {
+	return &x402.SettleResponse{Success: false}, nil
+}
+
+func (RejectVerifyFacilitator) GetSupported(ctx context.Context) (x402.SupportedResponse, error) {
+	return MockFacilitator{}.GetSupported(ctx)
+}
+
+// ErrorVerifyFacilitator returns an error from Verify (simulates facilitator outage).
+type ErrorVerifyFacilitator struct{ Err error }
+
+func (f ErrorVerifyFacilitator) Verify(ctx context.Context, payloadBytes []byte, requirementsBytes []byte) (*x402.VerifyResponse, error) {
+	if f.Err != nil {
+		return nil, f.Err
+	}
+	return nil, errors.New("verify failed")
+}
+
+func (f ErrorVerifyFacilitator) Settle(ctx context.Context, payloadBytes []byte, requirementsBytes []byte) (*x402.SettleResponse, error) {
+	return nil, errors.New("settle failed")
+}
+
+func (f ErrorVerifyFacilitator) GetSupported(ctx context.Context) (x402.SupportedResponse, error) {
+	return MockFacilitator{}.GetSupported(ctx)
 }
 
 // TestX402Config returns config aligned with [MockFacilitator] supported kinds.

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -100,7 +101,51 @@ func (a *API) GetStatus(w http.ResponseWriter, r *http.Request) {
 	if sess.AgentID != "" {
 		out["prepaidBalanceUnits"] = a.Svc.PrepaidBalance(sess.AgentID)
 	}
+	if ev, err := a.Svc.NaryoEventsForSession(id, 10); err == nil {
+		out["recentNaryoEvents"] = ev
+	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+type naryoEventBody struct {
+	SessionID string         `json:"sessionId"`
+	EventID   string         `json:"eventId"`
+	Payload   map[string]any `json:"payload"`
+}
+
+// PostNaryoEvent handles POST /internal/naryo/v1/events (Naryo broadcaster → platform).
+func (a *API) PostNaryoEvent(w http.ResponseWriter, r *http.Request) {
+	secret := config.NaryoIngestSecret()
+	if secret == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "naryo ingest not configured"})
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Naryo-Webhook-Secret")), []byte(secret)) != 1 {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	var body naryoEventBody
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if body.SessionID == "" || body.EventID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sessionId and eventId required"})
+		return
+	}
+	dup, err := a.Svc.IngestNaryoEvent(r.Context(), body.SessionID, body.EventID, body.Payload)
+	if err != nil {
+		if errors.Is(err, pipeline.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
+			return
+		}
+		if errors.Is(err, pipeline.ErrInvalidNaryoEvent) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "duplicate": dup})
 }
 
 // Start handles POST /v1/pipelines/{id}/start

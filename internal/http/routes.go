@@ -20,3 +20,8 @@ func NewMux(api *API) *http.ServeMux {
 	m.HandleFunc("POST /v1/agents/{agentId}/topup/deposit", api.TopUpDeposit)
 	return m
 }
+
+// RegisterInternalRoutes attaches internal routes that are not behind x402 (e.g. Naryo webhooks).
+func RegisterInternalRoutes(m *http.ServeMux, api *API) {
+	m.HandleFunc("POST /internal/naryo/v1/events", api.PostNaryoEvent)
+}

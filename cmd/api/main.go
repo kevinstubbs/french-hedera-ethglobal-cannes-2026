@@ -69,6 +69,7 @@ func main() {
 	root := http.NewServeMux()
 	root.HandleFunc("GET /healthz", api.Health)
 	root.HandleFunc("GET /observability/v1/summary", httpapi.ObservabilitySummary(obs))
+	httpapi.RegisterInternalRoutes(root, api)
 	root.Handle("/v1/", guarded)
 	root.Handle("/mcp", pipelinemcp.StreamableHTTPHandler(svc))
 

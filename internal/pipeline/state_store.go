@@ -11,6 +11,9 @@ var ErrNotFound = errors.New("pipeline session not found")
 type MemoryStore struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session
+	// naryoEvents and naryoDedup back inbound Naryo webhook payloads (tests + lightweight persistence).
+	naryoEvents map[string][]NaryoInboundEvent
+	naryoDedup  map[string]struct{}
 }
 
 // NewMemoryStore returns an empty store.

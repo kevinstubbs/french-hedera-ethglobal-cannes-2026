@@ -580,3 +580,27 @@ func (s *Service) recordActivity(typ, sessionID string, data map[string]any) {
 	}
 	s.activity.Record(ActivityEntry{Type: typ, SessionID: sessionID, Data: cp})
 }
+
+// IngestNaryoEvent persists an inbound Naryo webhook payload for a pipeline session.
+func (s *Service) IngestNaryoEvent(ctx context.Context, sessionID, eventID string, payload map[string]any) (duplicate bool, err error) {
+	_ = ctx
+	if s == nil {
+		return false, errors.New("nil service")
+	}
+	dup, err := s.store.AppendNaryoEvent(sessionID, eventID, payload)
+	if err != nil {
+		return false, err
+	}
+	if !dup {
+		s.recordActivity("naryo_event", sessionID, map[string]any{"eventId": eventID})
+	}
+	return dup, nil
+}
+
+// NaryoEventsForSession returns recent inbound Naryo events for a session.
+func (s *Service) NaryoEventsForSession(sessionID string, limit int) ([]NaryoInboundEvent, error) {
+	if s == nil {
+		return nil, errors.New("nil service")
+	}
+	return s.store.NaryoEvents(sessionID, limit)
+}
