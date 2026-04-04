@@ -6,6 +6,19 @@ Operational notes for running the Go API and the Next.js observability dashboard
 
 - **Go** (module targets Go 1.24+; use a recent toolchain).
 - **Node.js** and **npm** (for the dashboard).
+- **Docker** (optional): for standalone Naryo Configuration API checks — see [NARYO_VERIFY.md](./NARYO_VERIFY.md).
+
+## Naryo standalone (Configuration API)
+
+```bash
+cd deploy/naryo-verify && docker compose up -d
+# When GET http://127.0.0.1:6060/api/v1/nodes returns 200:
+python3 verify_naryo_api.py
+```
+
+The stack runs **Anvil** (Ethereum) in Compose and points **Hedera** at your **Solo** mirror on the host (`HEDERA_MIRROR_URL`, default `http://host.docker.internal:5551`). See [NARYO_VERIFY.md](./NARYO_VERIFY.md) for ports and env vars.
+
+See [NARYO_VERIFY.md](./NARYO_VERIFY.md) for scope (Ethereum baseline `PUT` cycle, broadcaster-config + `ALL` broadcasters; filter `POST` skipped on the tested image; declarative Hedera filter in `application.yml`).
 
 ## Go API
 
@@ -71,7 +84,21 @@ npm install
 npm run dev
 ```
 
-Open **http://localhost:3000**. The UI polls the Go API via a Next.js route handler (no browser CORS to the API).
+Open **http://localhost:3000**. The UI polls the Go API via a Next.js route handler (no browser CORS to the API). Use the **Hedera** tab to embed the Solo Explorer UI in an iframe when you run a local network.
+
+### Local Hedera with Solo
+
+Deploy a local Hiero/Hedera stack (Explorer UI on **http://localhost:8080** by default) as described in the [Solo user guide](https://solo.hiero.org/v0.60.0/docs/solo-user-guide/):
+
+```bash
+solo one-shot single deploy
+```
+
+Teardown when finished:
+
+```bash
+solo one-shot single destroy
+```
 
 ### Environment
 
@@ -80,6 +107,7 @@ Copy `dashboard/.env.example` to `dashboard/.env.local` if needed:
 | Variable | Purpose |
 |----------|---------|
 | `API_BASE_URL` | Base URL of the Go API **without** a trailing slash (default `http://127.0.0.1:8080`). |
+| `NEXT_PUBLIC_HEDERA_EXPLORER_URL` | URL of the Explorer UI for the **Hedera** tab iframe (default `http://localhost:8080`). |
 
 Production build:
 

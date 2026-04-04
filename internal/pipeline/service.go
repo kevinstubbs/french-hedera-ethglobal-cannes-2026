@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/hcs"
 	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/naryo"
 )
 
@@ -16,18 +15,32 @@ var (
 	ErrInvalidTransition = errors.New("invalid pipeline state transition")
 )
 
+// HCSLogger is the subset of HCS logging used by the pipeline service (avoid import cycles in tests).
+type HCSLogger interface {
+	PipelineCreated(ctx context.Context, sessionID, agentID string)
+	PipelineStarted(ctx context.Context, sessionID, naryoOpID string)
+	PipelinePaused(ctx context.Context, sessionID string)
+	PipelineResumed(ctx context.Context, sessionID string)
+	PipelineStopped(ctx context.Context, sessionID string)
+	PipelineReconfigured(ctx context.Context, sessionID string, phase int)
+	BillingTick(ctx context.Context, sessionID string, billedSeconds, rateCentsPerSecond int64)
+	PaymentStreamStarted(ctx context.Context, sessionID string)
+	PaymentStreamStalled(ctx context.Context, sessionID string)
+	PaymentStreamTerminated(ctx context.Context, sessionID string)
+}
+
 // Service coordinates pipeline sessions, Naryo, and billing notifications.
 type Service struct {
 	store    *MemoryStore
 	naryo    naryo.Client
-	hcs      *hcs.Logger
+	hcs      HCSLogger
 	activity *ActivityLog
 	rate     int64 // cents per second for billing metadata
 }
 
 // NewService wires dependencies. rateCentsPerSecond defaults to 1 if <= 0.
 // activity may be nil; when set, lifecycle events are mirrored for dashboards.
-func NewService(store *MemoryStore, client naryo.Client, log *hcs.Logger, rateCentsPerSecond int64, activity *ActivityLog) *Service {
+func NewService(store *MemoryStore, client naryo.Client, log HCSLogger, rateCentsPerSecond int64, activity *ActivityLog) *Service {
 	if rateCentsPerSecond <= 0 {
 		rateCentsPerSecond = 1
 	}
@@ -62,7 +75,10 @@ func (s *Service) Create(ctx context.Context, agentID string) (*Session, error) 
 		RateCentsPerSecond:  s.rate,
 	}
 	s.store.Put(sess)
-	s.emit(ctx, "pipeline_created", id, map[string]any{"agentId": agentID})
+	s.recordActivity("pipeline_created", id, map[string]any{"agentId": agentID})
+	if s.hcs != nil {
+		s.hcs.PipelineCreated(ctx, id, agentID)
+	}
 	return sess, nil
 }
 
@@ -86,16 +102,21 @@ func (s *Service) Start(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	s.emit(ctx, "pipeline_started", id, map[string]any{"naryoOpId": opID})
+	s.recordActivity("pipeline_started", id, map[string]any{"naryoOpId": opID})
+	if s.hcs != nil {
+		s.hcs.PipelineStarted(ctx, id, opID)
+	}
 	return nil
 }
 
 // Stop ends the session.
 func (s *Service) Stop(ctx context.Context, id string) error {
-	if _, err := s.store.Get(id); err != nil {
+	sess, err := s.store.Get(id)
+	if err != nil {
 		return err
 	}
-	err := s.naryo.StopPipeline(ctx, id)
+	streamWasActive := sess.PaymentStreamActive
+	err = s.naryo.StopPipeline(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -110,7 +131,13 @@ func (s *Service) Stop(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	s.emit(ctx, "pipeline_stopped", id, nil)
+	if streamWasActive && s.hcs != nil {
+		s.hcs.PaymentStreamTerminated(ctx, id)
+	}
+	s.recordActivity("pipeline_stopped", id, nil)
+	if s.hcs != nil {
+		s.hcs.PipelineStopped(ctx, id)
+	}
 	return nil
 }
 
@@ -131,7 +158,10 @@ func (s *Service) Pause(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	s.emit(ctx, "pipeline_paused", id, nil)
+	s.recordActivity("pipeline_paused", id, nil)
+	if s.hcs != nil {
+		s.hcs.PipelinePaused(ctx, id)
+	}
 	return nil
 }
 
@@ -152,7 +182,10 @@ func (s *Service) Resume(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	s.emit(ctx, "pipeline_resumed", id, nil)
+	s.recordActivity("pipeline_resumed", id, nil)
+	if s.hcs != nil {
+		s.hcs.PipelineResumed(ctx, id)
+	}
 	return nil
 }
 
@@ -162,7 +195,10 @@ func (s *Service) Reconfigure(ctx context.Context, id string, _ map[string]any) 
 	if err != nil {
 		return err
 	}
-	s.emit(ctx, "pipeline_reconfigured", id, map[string]any{"phase": 1})
+	s.recordActivity("pipeline_reconfigured", id, map[string]any{"phase": 1})
+	if s.hcs != nil {
+		s.hcs.PipelineReconfigured(ctx, id, 1)
+	}
 	return nil
 }
 
@@ -181,7 +217,14 @@ func (s *Service) SetPaymentStreamActive(ctx context.Context, id string, active 
 	if err != nil {
 		return err
 	}
-	s.emit(ctx, "payment_stream", id, map[string]any{"active": active})
+	s.recordActivity("payment_stream", id, map[string]any{"active": active})
+	if s.hcs != nil {
+		if active {
+			s.hcs.PaymentStreamStarted(ctx, id)
+		} else {
+			s.hcs.PaymentStreamStalled(ctx, id)
+		}
+	}
 	return nil
 }
 
@@ -231,33 +274,23 @@ func (s *Service) runBillingTick(ctx context.Context) {
 			}
 			v.BilledSeconds++
 			if s.hcs != nil {
-				s.hcs.Emit(ctx, hcs.Event{
-					Type:      "billing_tick",
-					SessionID: id,
-					Data: map[string]any{
-						"billedSeconds":      v.BilledSeconds,
-						"rateCentsPerSecond": v.RateCentsPerSecond,
-					},
-				})
+				s.hcs.BillingTick(ctx, id, v.BilledSeconds, v.RateCentsPerSecond)
 			}
 			return true, nil
 		})
 	}
 }
 
-func (s *Service) emit(ctx context.Context, typ, sessionID string, data map[string]any) {
-	if s.activity != nil {
-		var cp map[string]any
-		if len(data) > 0 {
-			cp = make(map[string]any, len(data))
-			for k, v := range data {
-				cp[k] = v
-			}
-		}
-		s.activity.Record(ActivityEntry{Type: typ, SessionID: sessionID, Data: cp})
-	}
-	if s.hcs == nil {
+func (s *Service) recordActivity(typ, sessionID string, data map[string]any) {
+	if s.activity == nil {
 		return
 	}
-	s.hcs.Emit(ctx, hcs.Event{Type: typ, SessionID: sessionID, Data: data})
+	var cp map[string]any
+	if len(data) > 0 {
+		cp = make(map[string]any, len(data))
+		for k, v := range data {
+			cp[k] = v
+		}
+	}
+	s.activity.Record(ActivityEntry{Type: typ, SessionID: sessionID, Data: cp})
 }

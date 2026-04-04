@@ -1,7 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Summary } from "@/lib/types";
+
+const SOLO_GUIDE =
+  "https://solo.hiero.org/v0.60.0/docs/solo-user-guide/" as const;
+
+type MainTab = "observability" | "hedera";
 
 function stateStyles(state: string) {
   switch (state) {
@@ -29,9 +34,19 @@ function formatTime(iso: string) {
 }
 
 export function DashboardClient() {
+  const [tab, setTab] = useState<MainTab>("observability");
   const [data, setData] = useState<Summary | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const hederaExplorerUrl = useMemo(
+    () =>
+      (process.env.NEXT_PUBLIC_HEDERA_EXPLORER_URL || "http://localhost:8080").replace(
+        /\/$/,
+        "",
+      ),
+    [],
+  );
 
   useEffect(() => {
     let stop = false;
@@ -68,35 +83,129 @@ export function DashboardClient() {
   return (
     <div className="space-y-10">
       <header className="flex flex-col gap-4 border-b border-white/[0.08] pb-8 sm:flex-row sm:items-end sm:justify-between">
-        <div>
+        <div className="min-w-0 flex-1">
           <p className="font-display text-xs uppercase tracking-[0.35em] text-[#c9a227]">
-            Observability
+            {tab === "observability" ? "Observability" : "Hedera (Solo)"}
           </p>
           <h1 className="font-display mt-2 text-4xl font-semibold tracking-tight text-zinc-50 sm:text-5xl">
-            Pipeline control room
+            {tab === "observability"
+              ? "Pipeline control room"
+              : "Local network explorer"}
           </h1>
           <p className="mt-3 max-w-xl text-sm leading-relaxed text-zinc-400">
-            Live view of Go API health, x402-derived payment signals, pipeline
-            sessions, Naryo adapter traffic, and the in-process activity ring.
+            {tab === "observability" ? (
+              <>
+                Live view of Go API health, x402-derived payment signals,
+                pipeline sessions, Naryo adapter traffic, and the in-process
+                activity ring.
+              </>
+            ) : (
+              <>
+                Embedded Solo Explorer UI (default{" "}
+                <code className="rounded bg-black/30 px-1 py-0.5 font-mono text-zinc-300">
+                  localhost:8080
+                </code>
+                ). Deploy the network with{" "}
+                <code className="rounded bg-black/30 px-1 py-0.5 font-mono text-zinc-300">
+                  solo one-shot single deploy
+                </code>
+                . See the{" "}
+                <a
+                  href={SOLO_GUIDE}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[#e8d5a3] underline decoration-[#c9a227]/40 underline-offset-2 hover:decoration-[#c9a227]"
+                >
+                  Solo user guide
+                </a>
+                .
+              </>
+            )}
           </p>
         </div>
-        <div className="flex flex-col items-start gap-2 text-right sm:items-end">
-          <div
-            className={`rounded-full border px-3 py-1 text-xs font-medium ${
-              err
-                ? "border-rose-500/50 bg-rose-500/10 text-rose-200"
-                : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
-            }`}
+        <div className="flex flex-col gap-3 sm:items-end">
+          <nav
+            className="flex flex-wrap gap-2 rounded-xl border border-white/[0.08] bg-black/20 p-1"
+            aria-label="Main views"
           >
-            {loading && !data ? "Connecting…" : err ? "Backend unreachable" : "Streaming"}
-          </div>
-          {data?.generatedAt && (
-            <span className="font-mono text-xs text-zinc-500">
-              snapshot {formatTime(data.generatedAt)}
-            </span>
+            <button
+              type="button"
+              onClick={() => setTab("observability")}
+              className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                tab === "observability"
+                  ? "bg-white/[0.12] text-zinc-50"
+                  : "text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-300"
+              }`}
+            >
+              Observability
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab("hedera")}
+              className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                tab === "hedera"
+                  ? "bg-white/[0.12] text-zinc-50"
+                  : "text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-300"
+              }`}
+            >
+              Hedera
+            </button>
+          </nav>
+          {tab === "observability" && (
+            <div className="flex flex-col items-start gap-2 text-right sm:items-end">
+              <div
+                className={`rounded-full border px-3 py-1 text-xs font-medium ${
+                  err
+                    ? "border-rose-500/50 bg-rose-500/10 text-rose-200"
+                    : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                }`}
+              >
+                {loading && !data
+                  ? "Connecting…"
+                  : err
+                    ? "Backend unreachable"
+                    : "Streaming"}
+              </div>
+              {data?.generatedAt && (
+                <span className="font-mono text-xs text-zinc-500">
+                  snapshot {formatTime(data.generatedAt)}
+                </span>
+              )}
+            </div>
+          )}
+          {tab === "hedera" && (
+            <a
+              href={hederaExplorerUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-lg border border-white/[0.12] bg-white/[0.06] px-3 py-1.5 text-sm text-zinc-200 hover:bg-white/[0.1]"
+            >
+              Open Explorer in new tab
+            </a>
           )}
         </div>
       </header>
+
+      {tab === "hedera" && (
+        <section className="space-y-3">
+          <p className="text-xs text-zinc-500">
+            If the frame stays blank, the Explorer may send{" "}
+            <code className="font-mono text-zinc-400">X-Frame-Options</code> or
+            your browser may block mixed content; use the link above.
+          </p>
+          <div className="overflow-hidden rounded-2xl border border-white/[0.08] bg-[#121218]/80 shadow-[0_0_0_1px_rgba(255,255,255,0.03)_inset]">
+            <iframe
+              title="Hiero Solo Explorer"
+              src={hederaExplorerUrl}
+              className="h-[min(78vh,900px)] w-full bg-zinc-950"
+              referrerPolicy="no-referrer-when-downgrade"
+            />
+          </div>
+        </section>
+      )}
+
+      {tab === "observability" && (
+        <>
 
       {err && (
         <div className="rounded-xl border border-rose-500/30 bg-rose-950/30 px-4 py-3 text-sm text-rose-100">
@@ -300,6 +409,8 @@ export function DashboardClient() {
           </ul>
         </section>
       </div>
+      </>
+      )}
     </div>
   );
 }

@@ -1,0 +1,19 @@
+openapi: 3.0.0
+info:
+  title: HTTP destination mock API
+  version: 0.0.1
+servers:
+  - url: http://mock-http:7070
+paths:
+  /verify-events:
+    post:
+      operationId: receiveEvents
+      responses:
+        "200":
+          description: ok
+  /verify-events-v2:
+    post:
+      operationId: receiveEventsV2
+      responses:
+        "200":
+          description: ok

@@ -16,6 +16,7 @@ import (
 	hcslog "github.com/french-hedera-ethglobal-cannes2026/submission/internal/hcs"
 	httpapi "github.com/french-hedera-ethglobal-cannes2026/submission/internal/http"
 	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/http/middleware"
+	pipelinemcp "github.com/french-hedera-ethglobal-cannes2026/submission/internal/mcp"
 	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/naryo"
 	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/pipeline"
 )
@@ -51,6 +52,7 @@ func main() {
 	root.HandleFunc("GET /healthz", api.Health)
 	root.HandleFunc("GET /observability/v1/summary", httpapi.ObservabilitySummary(obs))
 	root.Handle("/v1/", guarded)
+	root.Handle("/mcp", pipelinemcp.StreamableHTTPHandler(svc))
 
 	addr := ":8080"
 	if p := os.Getenv("PORT"); p != "" {
@@ -64,7 +66,7 @@ func main() {
 	}
 
 	go func() {
-		slog.Info("listening", "addr", addr)
+		slog.Info("listening", "addr", addr, "mcp_path", "/mcp")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("server", "err", err)
 			os.Exit(1)

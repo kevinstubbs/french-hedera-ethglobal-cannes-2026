@@ -13,7 +13,7 @@ export default function Home() {
           `,
         }}
       />
-      <div className="relative mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-10 lg:py-16">
+      <div className="relative mx-auto max-w-[min(100%,1680px)] px-4 py-12 sm:px-6 lg:px-10 lg:py-16">
         <DashboardClient />
       </div>
     </div>

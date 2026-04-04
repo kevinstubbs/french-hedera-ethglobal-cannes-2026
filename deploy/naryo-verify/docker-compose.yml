@@ -1,0 +1,66 @@
+# Minimal stack to exercise the Naryo Configuration API in isolation (Mongo + Anvil + mock HTTP + Naryo).
+# See docs/NARYO_VERIFY.md for the CRUD + operation-polling walkthrough.
+services:
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:stable
+    container_name: naryo-verify-anvil
+    command: ["anvil", "--host", "0.0.0.0", "--port", "8545"]
+    ports:
+      - "8545:8545"
+    networks:
+      - naryo-verify
+
+  mongodb:
+    image: mongo:7
+    container_name: naryo-verify-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - naryo-verify-mongo:/data/db
+    networks:
+      - naryo-verify
+
+  mock-http:
+    image: mockoon/cli:latest
+    container_name: naryo-verify-mock-http
+    restart: on-failure
+    ports:
+      - "7070:7070"
+    networks:
+      - naryo-verify
+    command: ["--data", "data", "--port", "7070", "--log-transaction"]
+    volumes:
+      - ./mock_http_server.yaml:/data
+
+  naryo-server:
+    image: ghcr.io/lf-decentralized-trust-labs/naryo:latest
+    container_name: naryo-verify-naryo
+    restart: on-failure
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # Solo mirror REST base URL as seen from the Naryo container (host gateway).
+      HEDERA_MIRROR_URL: ${HEDERA_MIRROR_URL:-http://host.docker.internal:5551}
+      # Optional: Hedera topic id (0.0.x) for the declarative TRANSACTION filter in application.yml.
+      SOLO_HCS_TOPIC_ID: ${SOLO_HCS_TOPIC_ID:-0.0.0}
+    depends_on:
+      anvil:
+        condition: service_started
+      mongodb:
+        condition: service_started
+      mock-http:
+        condition: service_started
+    ports:
+      # Naryo listens on 8060 inside the image; map to 6060 on the host for docs/scripts.
+      - "6060:8060"
+    networks:
+      - naryo-verify
+    volumes:
+      - ./application.yml:/app/application.yml
+
+networks:
+  naryo-verify:
+    driver: bridge
+
+volumes:
+  naryo-verify-mongo:
