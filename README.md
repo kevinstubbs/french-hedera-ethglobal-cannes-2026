@@ -32,37 +32,89 @@ Start Naryo cluster
 (Optional) Run demo which subscribes to events watching our topic (.env required)
 `cd agents/trading-signal && npm i && npm run demo`
 
-## Architecture (high level)
+## Architecture
+
+### High level
+
+Operators and agents share one **control plane API**. Paid pipeline actions go through **x402** (USDC on Base) into a **prepaid ledger**; **Naryo** runs indexing and delivery into the API; **Hedera** backs audit (HCS), deposit verification, and demos that move **HBAR** on-chain.
 
 ```mermaid
-flowchart LR
+flowchart TB
   subgraph clients [Clients]
-    Human[Human + MCP client]
-    Agent[Software agent]
-    Dashboard[Dashboard]
+    MCP[Human + MCP]
+    Agent[Agents]
+    Dash[Dashboard]
   end
-  subgraph go [Go control plane]
-    MCP[MCP pipeline tools]
-    API[REST + x402 gate]
-    Ledger[Prepaid ledger per agentId]
+  subgraph plane [Platform]
+    API[Go API — pipelines, billing, ingest]
   end
-  subgraph hedera [Hedera]
-    HV[Deposit verify + HCS]
-    HBAR[HBAR transfers]
+  subgraph pay [Settlement]
+    X402[x402 facilitator — USDC]
+    Hed[Hedera — HCS audit, deposits]
   end
-  subgraph data [Data plane]
-    Naryo[Naryo pipeline ops]
+  subgraph data [Indexing]
+    Ny[Naryo cluster]
   end
-  Human --> MCP
-  MCP --> API
-  Agent -->|control + top-up + polls| API
-  Dashboard -->|status + summary| API
-  API --> Ledger
-  API --> HV
-  API --> Naryo
-  Agent --> HBAR
+  MCP -->|configure| API
+  Agent -->|control, top-up, poll| API
+  Dash -->|read-only observability| API
+  API <-->|metered actions| X402
+  API --> Hed
+  API <-->|provision + events| Ny
+  Agent -.->|demo / direct chain use| Hed
 ```
 
-**How to read it:** Humans configure pipelines through **MCP** into the same **REST** surface agents use; **x402** meters paid actions, backed by the **prepaid ledger**. The API drives **Naryo** (pluggable data plane) and **Hedera** for verify / HCS; agents also use **HBAR** directly for on-chain moves in the demo story. **Dashboard** uses unpaid read APIs for observability.
+**How to read it:** **MCP** and **REST** hit the same pipeline model. **x402** gates the `/v1/...` surface; the **ledger** enforces prepaid time. **Naryo** is the data plane (filters, broadcasters); it posts events to the API, which can fan out to agents (see [`docs/PIPELINE_EVENT_ROUTING.md`](docs/PIPELINE_EVENT_ROUTING.md)). **Dashboard** proxies the unpaid observability routes on the API.
+
+### Control plane (lower level)
+
+Single **`cmd/api`** process: HTTP routes split between **x402-guarded** pipeline REST, **unpaid** health and observability, **webhook-authenticated** Naryo ingest, and **streamable MCP**. Domain logic lives in **`pipeline.Service`** with in-memory session state, prepaid ledger, periodic billing, and adapters to Naryo and Hedera/HCS.
+
+```mermaid
+flowchart TB
+  subgraph http [HTTP server]
+    H[GET /healthz]
+    O[GET /observability/v1/...]
+    N[POST /internal/naryo/v1/events/...]
+    V[POST/PUT /v1/...]
+    M[POST /mcp — streamable MCP]
+  end
+  subgraph gate [Payments]
+    PG[PaymentGate + x402 facilitator]
+  end
+  subgraph handlers [HTTP + MCP handlers]
+    API[internal/http]
+    MCP[internal/mcp]
+  end
+  subgraph core [Domain]
+    SVC[pipeline.Service]
+    ST[(session store)]
+    LD[(prepaid ledger)]
+    AL[activity log]
+    BT[billing ticker]
+  end
+  subgraph adapters [Integrations]
+    NC[naryo client — Config API + ops]
+    HC[HCS audit logger]
+    HD[hedera client — mirror / txs]
+  end
+  H --> API
+  O --> API
+  N --> API
+  V --> PG
+  PG --> API
+  M --> MCP
+  MCP --> SVC
+  API --> SVC
+  BT --> SVC
+  SVC --> ST
+  SVC --> LD
+  SVC --> AL
+  SVC --> NC
+  SVC --> HC
+  API --> HD
+```
+
+**Dashboard (Next.js):** server routes under `dashboard/src/app/api/backend/*` call the API’s observability endpoints (`API_BASE_URL`, default `http://127.0.0.1:8080`).
 
 For triggers, scope, and endpoint detail, see [`docs/PROJECT_SCOPE.md`](docs/PROJECT_SCOPE.md) and [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
