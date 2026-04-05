@@ -1,6 +1,7 @@
 package naryo
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -93,8 +94,8 @@ func TestDescribePipelineFilterPlanForSessionDemoShape(t *testing.T) {
 	cfg := map[string]any{
 		"eventSubscriptions": map[string]any{
 			"subscriptions": []any{
-				map[string]any{"kind": "hedera_hcs_topic", "topicId": "0.0.8510924", "hederaNetwork": "testnet"},
-				map[string]any{"kind": "erc20_transfer", "contractAddress": "0x036CbD53842c5426634e7929541eC2318f3dCF7e"},
+				map[string]any{"id": "hedera-hcs-topic-messages", "kind": "hedera_hcs_topic", "topicId": "0.0.8510924", "hederaNetwork": "testnet"},
+				map[string]any{"id": "evm-usdc-transfer-from", "kind": "erc20_transfer", "contractAddress": "0x036CbD53842c5426634e7929541eC2318f3dCF7e"},
 			},
 		},
 	}
@@ -104,6 +105,13 @@ func TestDescribePipelineFilterPlanForSessionDemoShape(t *testing.T) {
 	}
 	if d["useALLFallback"] != false {
 		t.Fatalf("useALLFallback: got %#v", d["useALLFallback"])
+	}
+	if d["winningSubscriptionId"] != "hedera-hcs-topic-messages" {
+		t.Fatalf("winningSubscriptionId: got %#v", d["winningSubscriptionId"])
+	}
+	raw, _ := d["subscriptionsNotProvisionedInNaryo"].([]string)
+	if len(raw) != 1 || !strings.Contains(raw[0], "erc20_transfer") {
+		t.Fatalf("expected one erc20 skipped note, got %#v", d["subscriptionsNotProvisionedInNaryo"])
 	}
 }
 

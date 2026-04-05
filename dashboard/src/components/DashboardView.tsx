@@ -506,17 +506,27 @@ export function DashboardView({
                                 Naryo filter plan (from config)
                               </h5>
                               <p className="mt-1 text-xs text-zinc-600">
-                                What start/resume would provision: scoped plans
-                                create a filter named{" "}
+                                What start/resume provisions in Naryo (one scoped
+                                filter per pipeline). Compare{" "}
                                 <code className="font-mono text-zinc-500">
-                                  pf-&#123;sessionId&#125;-hcs
+                                  winningSubscriptionId
                                 </code>{" "}
-                                or{" "}
+                                and{" "}
                                 <code className="font-mono text-zinc-500">
-                                  -evm
-                                </code>
-                                . ALL-target pipelines only create an HTTP
-                                broadcaster (no per-pipeline filter row).
+                                  subscriptionsNotProvisionedInNaryo
+                                </code>{" "}
+                                to the full Config JSON — extra subscriptions
+                                stay intent-only until we add multi-filter
+                                support.{" "}
+                                <code className="font-mono text-zinc-500">
+                                  hederaNetwork
+                                </code>{" "}
+                                /{" "}
+                                <code className="font-mono text-zinc-500">
+                                  caip2
+                                </code>{" "}
+                                are not sent to Naryo; mirror + RPC come from
+                                Naryo&apos;s YAML.
                               </p>
                               <div className="mt-2">
                                 <JsonBlock
