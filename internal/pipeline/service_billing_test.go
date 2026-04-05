@@ -7,11 +7,12 @@ import (
 	"time"
 
 	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/ledger"
+	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/naryo"
 )
 
 func TestBillingTickIncrementsPerSecondWindow(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(NewMemoryStore(), &mockNaryo{}, nil, 3, nil)
+	svc := NewService(NewMemoryStore(), &naryo.RecordingClient{}, nil, 3, nil)
 	sess, err := svc.Create(ctx, "agent-1")
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +37,7 @@ func TestBillingTickIncrementsPerSecondWindow(t *testing.T) {
 
 func TestBillingSkipsWhenPaymentStreamInactive(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(NewMemoryStore(), &mockNaryo{}, nil, 1, nil)
+	svc := NewService(NewMemoryStore(), &naryo.RecordingClient{}, nil, 1, nil)
 	sess, _ := svc.Create(ctx, "")
 	if err := svc.Start(ctx, sess.ID); err != nil {
 		t.Fatal(err)
@@ -55,7 +56,7 @@ func TestBillingSkipsWhenPaymentStreamInactive(t *testing.T) {
 
 func TestBillingSkipsWhenNotRunning(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(NewMemoryStore(), &mockNaryo{}, nil, 1, nil)
+	svc := NewService(NewMemoryStore(), &naryo.RecordingClient{}, nil, 1, nil)
 	sess, _ := svc.Create(ctx, "")
 	svc.BillingTick(ctx)
 	got, _ := svc.Status(sess.ID)
@@ -67,7 +68,7 @@ func TestBillingSkipsWhenNotRunning(t *testing.T) {
 
 func TestPauseStopsBillingResumeRestarts(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(NewMemoryStore(), &mockNaryo{}, nil, 1, nil)
+	svc := NewService(NewMemoryStore(), &naryo.RecordingClient{}, nil, 1, nil)
 	sess, _ := svc.Create(ctx, "")
 	_ = svc.Start(ctx, sess.ID)
 	svc.BillingTick(ctx)
@@ -88,19 +89,6 @@ func TestPauseStopsBillingResumeRestarts(t *testing.T) {
 	}
 }
 
-// mockNaryo is a minimal naryo.Client for pipeline package tests.
-type mockNaryo struct{}
-
-func (mockNaryo) EnsurePipeline(ctx context.Context, sessionID string) (string, error) {
-	return "op-" + sessionID, nil
-}
-func (mockNaryo) PauseEgress(ctx context.Context, sessionID string) error   { return nil }
-func (mockNaryo) ResumeEgress(ctx context.Context, sessionID string) error { return nil }
-func (mockNaryo) StopPipeline(ctx context.Context, sessionID string) error  { return nil }
-func (mockNaryo) Stats() map[string]any {
-	return map[string]any{"mode": "mockNaryo"}
-}
-
 func TestPrepaidPeriodicDebit(t *testing.T) {
 	ctx := context.Background()
 	tick := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -110,7 +98,7 @@ func TestPrepaidPeriodicDebit(t *testing.T) {
 	if err := led.Credit("agent-1", 10_000, "", "seed"); err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(NewMemoryStore(), &mockNaryo{}, nil, 1, nil,
+	svc := NewService(NewMemoryStore(), &naryo.RecordingClient{}, nil, 1, nil,
 		WithPrepaidLedger(led),
 		WithRateUnitsPerMinute(60),
 		WithDebitIntervalSeconds(60),
@@ -146,7 +134,7 @@ func TestPrepaidBillingSummaryWindow(t *testing.T) {
 	h := &mockHCS{}
 	led := ledger.NewMemoryLedger()
 	_ = led.Credit("a1", 100_000, "", "seed")
-	svc := NewService(NewMemoryStore(), &mockNaryo{}, h, 1, nil,
+	svc := NewService(NewMemoryStore(), &naryo.RecordingClient{}, h, 1, nil,
 		WithPrepaidLedger(led),
 		WithRateUnitsPerMinute(1),
 		WithDebitIntervalSeconds(60),
@@ -172,7 +160,7 @@ func TestPrepaidBillingSummaryWindow(t *testing.T) {
 func TestCreateRejectedWithoutBalance(t *testing.T) {
 	ctx := context.Background()
 	led := ledger.NewMemoryLedger()
-	svc := NewService(NewMemoryStore(), &mockNaryo{}, nil, 1, nil,
+	svc := NewService(NewMemoryStore(), &naryo.RecordingClient{}, nil, 1, nil,
 		WithPrepaidLedger(led),
 		WithRateUnitsPerMinute(1),
 		WithMinStartMinutes(10),

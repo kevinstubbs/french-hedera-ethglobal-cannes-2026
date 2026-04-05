@@ -67,7 +67,7 @@ func NewPipelineServer(svc *pipeline.Service) *mcpsdk.Server {
 	}
 	mcpsdk.AddTool(s, &mcpsdk.Tool{
 		Name:        "reconfigure_pipeline",
-		Description: "Apply a configuration patch (same as PUT /v1/pipelines/{id}/reconfigure).",
+		Description: "Merge a patch into the pipeline session config (same as PUT /v1/pipelines/{id}/reconfigure). Naryo filters/broadcasters refresh on the next start or resume from config.eventSubscriptions (see PIPELINE_EVENT_ROUTING.md).",
 	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, in reconfIn) (*mcpsdk.CallToolResult, map[string]any, error) {
 		if in.Patch == nil {
 			in.Patch = map[string]any{}
@@ -111,6 +111,9 @@ func NewPipelineServer(svc *pipeline.Service) *mcpsdk.Server {
 		}
 		if sess.AgentID != "" {
 			out["prepaidBalanceUnits"] = svc.PrepaidBalance(sess.AgentID)
+		}
+		if ev, err := svc.NaryoEventsForSession(in.PipelineID, 10); err == nil {
+			out["recentNaryoEvents"] = ev
 		}
 		return okToolResult(http.StatusOK, out)
 	})

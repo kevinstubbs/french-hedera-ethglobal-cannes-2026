@@ -1,5 +1,23 @@
 /**
- * Demo: create pipeline → x402 start → optional synthetic Naryo ingest → poll GET status (~5s, SIGINT to stop).
+ * Demo: create pipeline → PUT reconfigure (event subscription intent) → x402 start → poll GET .../status (~5s, SIGINT to stop).
+ * `recentNaryoEvents` on status only appear when something (e.g. Naryo HTTP broadcaster) POSTs `/internal/naryo/v1/events` — this script does not simulate that.
+ *
+ * After create, the script **asks the control plane** for a pipeline whose session `config.eventSubscriptions`
+ * describes a logical **OR** of:
+ *   (1) any HCS messages on Hedera topic `DEMO_HCS_TOPIC_ID` (default 0.0.8510924) on `DEMO_HEDERA_NETWORK` (default testnet), and
+ *   (2) USDC ERC-20 `Transfer` on `DEMO_LISTEN_EVM_CAIP2` (default = `X402_NETWORK`, usually Base Sepolia eip155:84532)
+ *       from `DEMO_USDC_TRANSFER_FROM` (default demo wallet below) for contract `DEMO_USDC_CONTRACT` (default Base Sepolia USDC).
+ *
+ * Env overrides (see agents/trading-signal/.env.example):
+ *   DEMO_HCS_TOPIC_ID         — Hedera topic
+ *   DEMO_HEDERA_NETWORK       — e.g. testnet
+ *   DEMO_USDC_TRANSFER_FROM   — `from` on Transfer
+ *   DEMO_USDC_CONTRACT        — USDC on that EVM chain
+ *   DEMO_LISTEN_EVM_CAIP2     — CAIP-2 for the USDC rule (default X402_NETWORK)
+ *
+ * **Scope:** This only records subscription **intent** on the session (dashboard / agents / ops). Naryo must still
+ * index the same topic and chain — e.g. `deploy/naryo-verify` sets `HEDERA_MIRROR_URL`, `LOCAL_NODE_HCS_TOPIC_ID`,
+ * and `EVM_RPC_URL` (default Base Sepolia `https://sepolia.base.org`). See docs/PIPELINE_EVENT_ROUTING.md.
  *
  * Prereqs: Go API running; API X402_PAY_TO set (non-zero). Default X402_NETWORK is Base Sepolia (eip155:84532),
  * not Ethereum Sepolia (eip155:11155111) — fund the payer key with USDC on that same network.
@@ -19,6 +37,7 @@
 import "./loadDotenv.mjs";
 import { decodePaymentRequiredHeader, decodePaymentResponseHeader } from "@x402/core/http";
 import { createControlPlaneFetch } from "../dist/index.js";
+import { getAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 const base = (process.env.API_BASE_URL ?? "http://127.0.0.1:8080").replace(/\/+$/, "");
@@ -26,7 +45,6 @@ const agentId = process.env.AGENT_ID ?? "";
 const pk = process.env.X402_EVM_PRIVATE_KEY?.trim();
 const x402NetworkEnv = process.env.X402_NETWORK?.trim() || "eip155:84532";
 const evmRpcUrl = process.env.EVM_RPC_URL?.trim() || undefined;
-const ingestSecret = process.env.NARYO_INGEST_SECRET?.trim();
 const expectPub = process.env.AGENT_EVM_PUBLIC_ADDRESS?.trim();
 
 if (!pk?.startsWith("0x") || pk.length < 66) {
@@ -177,6 +195,9 @@ async function logUnpaidStartPaymentDetails(url, headers) {
 console.log("API_BASE_URL", base);
 console.log("X402_NETWORK (.env)", x402NetworkEnv);
 
+const demoPipelineSubs = resolveDemoPipelineSubscriptionInputs(x402NetworkEnv);
+logDemoPipelineIntentBanner(demoPipelineSubs);
+
 /**
  * @param {string} text response body
  * @returns {{ required: number; remaining: number } | null}
@@ -216,6 +237,87 @@ async function postJson(url, headers, body) {
   });
   const text = await r.text();
   return { ok: r.ok, status: r.status, text };
+}
+
+/**
+ * @param {string} url
+ * @param {Record<string, string>} headers
+ * @param {unknown} body
+ */
+async function putJson(url, headers, body) {
+  const r = await fetch(url, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify(body),
+  });
+  const text = await r.text();
+  return { ok: r.ok, status: r.status, text };
+}
+
+/**
+ * Resolved env for `config.eventSubscriptions` (single source for banner + PUT body).
+ *
+ * @param {string} x402NetworkFallback used when DEMO_LISTEN_EVM_CAIP2 is unset
+ */
+function resolveDemoPipelineSubscriptionInputs(x402NetworkFallback) {
+  const topicId = process.env.DEMO_HCS_TOPIC_ID?.trim() || "0.0.8510924";
+  const hederaNetwork = process.env.DEMO_HEDERA_NETWORK?.trim() || "testnet";
+  const transferFrom =
+    process.env.DEMO_USDC_TRANSFER_FROM?.trim() || "0xefd3c8d378aaa06c6c349f704680fc5d7c61a51d";
+  const usdcContract =
+    process.env.DEMO_USDC_CONTRACT?.trim() || "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+  const listenEvmCaip2 = process.env.DEMO_LISTEN_EVM_CAIP2?.trim() || x402NetworkFallback;
+  return { topicId, hederaNetwork, transferFrom, usdcContract, listenEvmCaip2 };
+}
+
+/**
+ * @param {ReturnType<typeof resolveDemoPipelineSubscriptionInputs>} inputs
+ */
+function buildEventSubscriptionsFromInputs(inputs) {
+  return {
+    version: 1,
+    match: "any",
+    description:
+      "Deliver events when ANY subscription matches: Hedera HCS messages on the topic, or USDC Transfer from the given address.",
+    subscriptions: [
+      {
+        id: "hedera-hcs-topic-messages",
+        kind: "hedera_hcs_topic",
+        hederaNetwork: inputs.hederaNetwork,
+        topicId: inputs.topicId,
+      },
+      {
+        id: "evm-usdc-transfer-from",
+        kind: "erc20_transfer",
+        caip2: inputs.listenEvmCaip2,
+        contractAddress: getAddress(inputs.usdcContract),
+        tokenSymbol: "USDC",
+        fromAddress: getAddress(inputs.transferFrom),
+      },
+    ],
+  };
+}
+
+/**
+ * @param {ReturnType<typeof resolveDemoPipelineSubscriptionInputs>} inputs
+ */
+function logDemoPipelineIntentBanner(inputs) {
+  const fromAddr = getAddress(inputs.transferFrom);
+  const usdcAddr = getAddress(inputs.usdcContract);
+  console.log("");
+  console.log("=== Pipeline subscription intent (will apply via PUT .../reconfigure → config.eventSubscriptions) ===");
+  console.log("Match ANY of: HCS messages on Hedera topic | USDC Transfer from address on EVM network.");
+  console.log("");
+  console.log("  DEMO_HCS_TOPIC_ID           →", inputs.topicId);
+  console.log("  DEMO_HEDERA_NETWORK         →", inputs.hederaNetwork);
+  console.log("  DEMO_USDC_TRANSFER_FROM     →", fromAddr);
+  console.log("  DEMO_USDC_CONTRACT          →", usdcAddr);
+  console.log("  DEMO_LISTEN_EVM_CAIP2       →", inputs.listenEvmCaip2);
+  console.log("");
+  console.log(
+    "Scope: intent on the session only. Align Naryo (e.g. deploy/naryo-verify: HEDERA_MIRROR_URL, LOCAL_NODE_HCS_TOPIC_ID, EVM_RPC_URL).",
+  );
+  console.log("");
 }
 
 const createBody = agentId ? { agentId } : {};
@@ -274,6 +376,38 @@ if (!id) {
   process.exit(1);
 }
 console.log("created pipeline", id);
+
+/** @type {ReturnType<typeof buildEventSubscriptionsFromInputs>} */
+let eventSubscriptions;
+try {
+  eventSubscriptions = buildEventSubscriptionsFromInputs(demoPipelineSubs);
+} catch (e) {
+  const msg = e instanceof Error ? e.message : String(e);
+  console.error("Invalid DEMO_USDC_TRANSFER_FROM or DEMO_USDC_CONTRACT (must be valid EVM addresses):", msg);
+  process.exit(1);
+}
+
+const rc = await putJson(`${base}/v1/pipelines/${id}/reconfigure`, jsonHeaders, {
+  patch: { eventSubscriptions },
+});
+if (!rc.ok) {
+  console.error("PUT .../reconfigure (eventSubscriptions) failed", rc.status, rc.text);
+  process.exit(1);
+}
+console.log("Applied subscription intent to session (OR):");
+console.log(
+  "  • Hedera",
+  eventSubscriptions.subscriptions[0].hederaNetwork,
+  "topic",
+  eventSubscriptions.subscriptions[0].topicId,
+);
+console.log(
+  "  • USDC Transfer from",
+  eventSubscriptions.subscriptions[1].fromAddress,
+  "on",
+  eventSubscriptions.subscriptions[1].caip2,
+);
+console.log("full config.eventSubscriptions:", JSON.stringify(eventSubscriptions, null, 2));
 
 const startUrl = `${base}/v1/pipelines/${id}/start`;
 
@@ -361,33 +495,19 @@ if (sr.ok) {
       "409 before a successful paid /start: prepaid rejected the handler before or after x402 (ensure ledger runway; see PREPAID_DEV_AUTO_CREDIT_UNITS).",
     );
   } else if (sr.status >= 400 && sr.status < 500 && sr.status !== 402) {
-    console.error("If prepaid error: set PREPAID_DEV_AUTO_CREDIT_UNITS on API or top up the agent.");
+    if (/naryo:.*NullPointerException/i.test(t)) {
+      console.error(
+        [
+          "Naryo broadcaster-configuration async NPE: ensure GET /api/v1/broadcaster-configurations has an HTTP row whose endpoint.url matches NARYO_PLATFORM_INGEST_URL (API auto-reuses), or set NARYO_BROADCASTER_CONFIGURATION_ID.",
+          "Fresh Mongo + broken image: docker compose pull in deploy/naryo-verify, or set NARYO_IMAGE in deploy/naryo-verify/.env — see deploy/naryo-verify/.env.example.",
+          "API startup requires NARYO_CONFIG_API_BASE and NARYO_PLATFORM_INGEST_URL; verify with deploy/naryo-verify/verify_naryo_api.py and RUNBOOK.",
+        ].join("\n"),
+      );
+    } else {
+      console.error("If prepaid error: set PREPAID_DEV_AUTO_CREDIT_UNITS on API or top up the agent.");
+    }
   }
   process.exit(1);
-}
-
-if (ingestSecret) {
-  const eventId = `demo-${Date.now()}`;
-  const ir = await fetch(`${base}/internal/naryo/v1/events`, {
-    method: "POST",
-    headers: {
-      ...jsonHeaders,
-      "X-Naryo-Webhook-Secret": ingestSecret,
-    },
-    body: JSON.stringify({
-      sessionId: id,
-      eventId,
-      payload: { source: "demo-control-plane", at: new Date().toISOString() },
-    }),
-  });
-  if (!ir.ok) {
-    console.warn("ingest failed (optional)", ir.status, await ir.text());
-  } else {
-    const ing = await ir.json();
-    console.log("ingest", ing);
-  }
-} else {
-  console.log("skip ingest (set NARYO_INGEST_SECRET to POST /internal/naryo/v1/events)");
 }
 
 const pollMsRaw = process.env.DEMO_POLL_INTERVAL_MS ?? "5000";
@@ -397,53 +517,42 @@ const maxRoundsRaw = process.env.DEMO_POLL_MAX_ROUNDS ?? "0";
 const maxRounds = Number.parseInt(maxRoundsRaw, 10);
 const pollUntilSigint = !Number.isFinite(maxRounds) || maxRounds <= 0;
 
-/** @type {Set<string>} */
-const seenEventIds = new Set();
 let stopPoll = false;
 process.on("SIGINT", () => {
   stopPoll = true;
   console.log("\nStopping status poll (SIGINT).");
 });
 
+const statusUrl = `${base}/v1/pipelines/${id}/status`;
 console.log(
-  `Polling GET .../status every ~${pollIntervalMs}ms` +
+  `Polling ${statusUrl} every ~${pollIntervalMs}ms` +
     (pollUntilSigint ? " until SIGINT" : `, max ${maxRounds} round(s)`) +
     " (plain fetch — not x402; 409 if prepaid hits zero while running).",
 );
 
 let round = 0;
 while (!stopPoll) {
-  const st = await fetch(`${base}/v1/pipelines/${id}/status`, {
+  const t0 = new Date().toISOString();
+  console.log(`[${t0}] GET ${statusUrl}`);
+  const st = await fetch(statusUrl, {
     headers: { Accept: "application/json" },
   });
+  const bodyText = await st.text();
   if (!st.ok) {
-    const t = await st.text();
-    console.error("GET .../status failed", st.status, t);
+    console.error(`[${t0}] HTTP ${st.status} body:`, bodyText);
     if (st.status === 409) {
       console.error("Prepaid empty while pipeline is running/paused — top up ledger (POST .../topup/x402) or wait for dev auto-credit.");
     }
     process.exit(1);
   }
-  const status = /** @type {Record<string, unknown>} */ (await st.json());
-  const evs = status.recentNaryoEvents;
-  if (Array.isArray(evs)) {
-    for (const e of evs) {
-      if (!e || typeof e !== "object") continue;
-      const rec = /** @type {Record<string, unknown>} */ (e);
-      const eid = rec.eventId ?? rec.event_id;
-      if (typeof eid !== "string" || seenEventIds.has(eid)) continue;
-      seenEventIds.add(eid);
-      console.log("new Naryo event", eid, JSON.stringify(e));
-    }
+  let status;
+  try {
+    status = /** @type {Record<string, unknown>} */ (JSON.parse(bodyText));
+  } catch {
+    console.error(`[${t0}] HTTP ${st.status} non-JSON body:`, bodyText);
+    process.exit(1);
   }
-  console.log(
-    "status tick",
-    new Date().toISOString(),
-    "state",
-    status.state,
-    "prepaidBalanceUnits",
-    status.prepaidBalanceUnits ?? "(n/a)",
-  );
+  console.log(`[${t0}] HTTP ${st.status} JSON:`, JSON.stringify(status, null, 2));
   round++;
   if (!pollUntilSigint && round >= maxRounds) {
     break;

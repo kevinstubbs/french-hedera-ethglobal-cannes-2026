@@ -14,7 +14,7 @@ import (
 
 func TestStreamableHTTPRentPipeline(t *testing.T) {
 	ctx := context.Background()
-	svc := pipeline.NewService(pipeline.NewMemoryStore(), &naryo.MockClient{}, nil, 1, nil)
+	svc := pipeline.NewService(pipeline.NewMemoryStore(), &naryo.RecordingClient{}, nil, 1, nil)
 	ts := httptest.NewServer(StreamableHTTPHandler(svc))
 	t.Cleanup(ts.Close)
 

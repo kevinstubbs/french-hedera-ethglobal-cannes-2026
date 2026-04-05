@@ -38,7 +38,14 @@ func main() {
 	})
 
 	store := pipeline.NewMemoryStore()
-	naryoClient := naryo.NewFromEnv()
+	naryoClient, err := naryo.NewFromEnv()
+	if err != nil {
+		slog.Error("naryo", "err", err)
+		os.Exit(1)
+	}
+	if config.NaryoSkipEgressProvision() {
+		slog.Warn("naryo egress provisioning disabled (NARYO_SKIP_EGRESS_PROVISION); filters and broadcasters are not created on start/resume — Naryo will stay empty unless you provision elsewhere")
+	}
 	hedCli := hedera.NewClientFromConfig(hedCfg)
 
 	var hcsOpts []hcslog.LoggerOption
@@ -80,6 +87,7 @@ func main() {
 	root.HandleFunc("GET /healthz", api.Health)
 	root.HandleFunc("GET /observability/v1/summary", httpapi.ObservabilitySummary(obs))
 	root.HandleFunc("GET /observability/v1/pipelines/{id}", httpapi.ObservabilityPipelineDetail(obs))
+	root.HandleFunc("GET /observability/v1/naryo/configuration", httpapi.ObservabilityNaryoConfiguration(obs))
 	httpapi.RegisterInternalRoutes(root, api)
 	root.Handle("/v1/", guarded)
 	root.Handle("/mcp", pipelinemcp.StreamableHTTPHandler(svc))

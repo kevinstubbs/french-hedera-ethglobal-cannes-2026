@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -129,15 +128,9 @@ type naryoEventBody struct {
 	Payload   map[string]any `json:"payload"`
 }
 
-// PostNaryoEvent handles POST /internal/naryo/v1/events (Naryo broadcaster → platform).
+// PostNaryoEvent handles POST /internal/naryo/v1/events (explicit sessionId in JSON; tests and manual tools).
 func (a *API) PostNaryoEvent(w http.ResponseWriter, r *http.Request) {
-	secret := config.NaryoIngestSecret()
-	if secret == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "naryo ingest not configured"})
-		return
-	}
-	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Naryo-Webhook-Secret")), []byte(secret)) != 1 {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+	if !a.checkNaryoIngestAuth(w, r) {
 		return
 	}
 	var body naryoEventBody
@@ -218,7 +211,8 @@ func (a *API) Reconfigure(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+	// Reconfigure updates session.Config only; Naryo filters / nodes are not changed (see docs/PIPELINE_EVENT_ROUTING.md).
+	writeJSON(w, http.StatusOK, map[string]any{"ok": "true", "naryoTouched": false})
 }
 
 // PaymentStream handles PUT /v1/pipelines/{id}/payment-stream

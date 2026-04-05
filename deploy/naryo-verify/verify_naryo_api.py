@@ -2,7 +2,7 @@
 """
 Proves Naryo Configuration API CRUD + /api/v1/operations/{id} polling.
 
-Uses the Ethereum (Anvil) baseline node id from application.yml (see docs/NARYO_VERIFY.md).
+Uses the Ethereum (Base Sepolia RPC) baseline node id from application.yml (see docs/NARYO_VERIFY.md).
 Hedera (local mirror / hedera-local-node) is configured there too for multi-chain baseline. Creating extra nodes via POST
 often requires a matching store configuration; this script exercises node *updates*
 (PUT + prevItemHash) on the Ethereum baseline only.
@@ -30,7 +30,7 @@ from typing import Any
 
 
 BASE = "http://127.0.0.1:6060"
-# Ethereum Anvil node id — matches deploy/naryo-verify/application.yml (Naryo quickstart example).
+# Ethereum baseline node id — matches deploy/naryo-verify/application.yml (Base Sepolia JSON-RPC).
 BASELINE_NODE_ID = "eadc75b2-4217-4018-95af-f67c13058976"
 
 

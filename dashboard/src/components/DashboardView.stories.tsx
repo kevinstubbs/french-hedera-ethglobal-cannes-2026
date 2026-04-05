@@ -7,6 +7,8 @@ import {
 } from "@/components/DashboardView";
 import type { PipelineDetailResponse, Summary } from "@/lib/types";
 import {
+  mockNaryoConfigurationFull,
+  mockNaryoConfigurationPipeline,
   mockPipelineDetailSess8f2a1c,
   mockSummaryEmpty,
   mockSummaryLoaded,
@@ -61,6 +63,19 @@ function StatefulView(
       recentNaryoEvents: [],
     };
   }, [selectedId, data]);
+  const naryoPipe = useMemo(() => {
+    if (!selectedId) return null;
+    if (selectedId === "sess-8f2a1c") return mockNaryoConfigurationPipeline;
+    return {
+      mode: "http",
+      generatedAt: mockSummaryLoaded.generatedAt,
+      pipelineId: selectedId,
+      filterNamePrefix: `pf-${selectedId}-`,
+      filters: [] as unknown[],
+      broadcasters: [] as unknown[],
+      broadcasterConfigurations: [] as unknown[],
+    };
+  }, [selectedId]);
   return (
     <DashboardView
       tab={tab}
@@ -72,6 +87,10 @@ function StatefulView(
       pipelineDetail={pipelineDetail}
       pipelineDetailLoading={false}
       pipelineDetailErr={null}
+      naryoConfiguration={data ? mockNaryoConfigurationFull : null}
+      naryoConfigurationErr={null}
+      naryoConfigurationPipeline={data ? naryoPipe : null}
+      naryoConfigurationPipelineErr={null}
     />
   );
 }

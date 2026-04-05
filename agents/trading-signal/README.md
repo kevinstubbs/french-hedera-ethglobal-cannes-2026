@@ -31,11 +31,11 @@ await fetchPaid(`${process.env.API_BASE_URL}/v1/pipelines`, { method: "POST", bo
 
 ## Demo (live API)
 
-Fill `.env` from `.env.example` (Base Sepolia payer key, `API_BASE_URL`, optional `NARYO_INGEST_SECRET` matching the Go API). Then:
+Fill `.env` from `.env.example` (Base Sepolia payer key, `API_BASE_URL`). Then:
 
 ```bash
 cd agents/trading-signal
 npm run demo
 ```
 
-This builds `dist/`, runs `scripts/demo-control-plane.mjs`: create pipeline → `POST .../start` with x402 → optional synthetic Naryo ingest → prints `GET .../status` (including `recentNaryoEvents` when ingest succeeded).
+This builds `dist/`, runs `scripts/demo-control-plane.mjs`: create pipeline → `POST .../start` with x402 → polls `GET .../status` (logs `recentNaryoEvents` when the platform has received real deliveries via `POST /internal/naryo/v1/events`, e.g. from Naryo — the demo does not fake that webhook).

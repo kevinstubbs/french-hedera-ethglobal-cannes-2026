@@ -57,7 +57,7 @@ func bodyMap(t *testing.T, m map[string]any) map[string]any {
 // TestAgentPipelineDemo exercises MCP tools against [pipeline.Service] (in-process, same as folded API server).
 func TestAgentPipelineDemo(t *testing.T) {
 	ctx := context.Background()
-	svc := pipeline.NewService(pipeline.NewMemoryStore(), &naryo.MockClient{}, nil, 1, nil)
+	svc := pipeline.NewService(pipeline.NewMemoryStore(), &naryo.RecordingClient{}, nil, 1, nil)
 	srv := NewPipelineServer(svc)
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "e2e-agent", Version: "1"}, nil)
 

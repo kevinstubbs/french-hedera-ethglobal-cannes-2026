@@ -29,7 +29,7 @@ type stackConfig struct {
 	HederaCfg   config.Hedera
 }
 
-func newTestStackWith(t *testing.T, cfg stackConfig) (*httptest.Server, *http.Client, *pipeline.Service, *naryo.MockClient, *ledger.MemoryLedger) {
+func newTestStackWith(t *testing.T, cfg stackConfig) (*httptest.Server, *http.Client, *pipeline.Service, *naryo.RecordingClient, *ledger.MemoryLedger) {
 	t.Helper()
 	t.Setenv("NARYO_INGEST_SECRET", "test-naryo-secret")
 
@@ -38,7 +38,7 @@ func newTestStackWith(t *testing.T, cfg stackConfig) (*httptest.Server, *http.Cl
 	if fac == nil {
 		fac = x402test.MockFacilitator{}
 	}
-	nm := &naryo.MockClient{}
+	nm := &naryo.RecordingClient{}
 	store := pipeline.NewMemoryStore()
 	var opts []pipeline.ServiceOption
 	var memLed *ledger.MemoryLedger
@@ -56,6 +56,7 @@ func newTestStackWith(t *testing.T, cfg stackConfig) (*httptest.Server, *http.Cl
 	root.HandleFunc("GET /healthz", api.Health)
 	root.HandleFunc("GET /observability/v1/summary", ObservabilitySummary(obs))
 	root.HandleFunc("GET /observability/v1/pipelines/{id}", ObservabilityPipelineDetail(obs))
+	root.HandleFunc("GET /observability/v1/naryo/configuration", ObservabilityNaryoConfiguration(obs))
 	RegisterInternalRoutes(root, api)
 	root.Handle("/v1/", gate)
 
@@ -128,6 +129,29 @@ func TestObservabilityPipelineDetail(t *testing.T) {
 	}
 	if got, _ := body.Session["id"].(string); got != cr.ID {
 		t.Fatalf("session.id: want %q got %q", cr.ID, got)
+	}
+}
+
+func TestObservabilityNaryoConfigurationRecording(t *testing.T) {
+	ts, _, _, _, _ := newTestStackWith(t, stackConfig{})
+	resp, err := http.Get(ts.URL + "/observability/v1/naryo/configuration")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	var snap map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+		t.Fatal(err)
+	}
+	if snap["mode"] != "recording" {
+		t.Fatalf("expected recording snapshot, got %#v", snap["mode"])
+	}
+	hints, _ := snap["snapshotHints"].([]any)
+	if len(hints) == 0 {
+		t.Fatal("expected non-empty snapshotHints for recording client")
 	}
 }
 

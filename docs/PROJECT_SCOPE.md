@@ -6,11 +6,11 @@ This document is the canonical boundary for the hackathon demo: what we are buil
 
 We are building a **metered, payable control plane** for long-running **data pipelines** that **software agents** can drive. Humans and agents **pay per action** using **x402** (EVM “exact” scheme) on the Go API, with an **off-chain prepaid ledger** keyed by **`agentId`**. **Hedera** is used where it adds clear value (e.g. deposit verification, HCS audit / billing summaries)—not as a replacement for the MVP prepaid ledger.
 
-**Naryo** integration in this repo may be **mocked**; the architecture treats the data plane as **pluggable** while the **payment and session model** stay real.
+**Naryo** is integrated via a **live Configuration API client** at runtime (required env); Go tests use an in-process **recording** client that does not call Naryo. The **payment and session model** stay real regardless.
 
 ## Demo story (judge path)
 
-1. **Human** configures “what to watch” using an **MCP client** (e.g. IDE) against the Go **MCP** server, which updates pipeline configuration (opaque patch to the mock today—the **narrative** is what matters).
+1. **Human** configures “what to watch” using an **MCP client** (e.g. IDE) against the Go **MCP** server, which updates pipeline configuration (session `eventSubscriptions` and related fields—the **narrative** is what matters).
 2. **Trading / signal agent** uses **REST + x402** for paid control-plane actions and **Hedera Agent Kit** (or the Hedera SDK) for **HBAR** movements when logic decides to act.
 3. **Prepaid / top-up:** the agent observes **`prepaidBalanceUnits`** (and related fields) from API status; when low, it calls **`topup/x402`** with an x402-aware client.
 4. **Observability:** dashboard + summary API; optional HCS trail when configured.

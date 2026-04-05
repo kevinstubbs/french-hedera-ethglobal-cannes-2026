@@ -2,7 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DashboardView, type MainTab } from "@/components/DashboardView";
-import type { PipelineDetailResponse, Summary } from "@/lib/types";
+import type {
+  NaryoConfigurationSnapshot,
+  PipelineDetailResponse,
+  Summary,
+} from "@/lib/types";
 import {
   createTelemetryAccumulator,
   ingestAndProject,
@@ -25,6 +29,14 @@ export function DashboardClient() {
   );
   const telemetryAcc = useRef(createTelemetryAccumulator());
   const [telemetryRows, setTelemetryRows] = useState<TelemetryChartRow[]>([]);
+  const [naryoConfig, setNaryoConfig] =
+    useState<NaryoConfigurationSnapshot | null>(null);
+  const [naryoConfigErr, setNaryoConfigErr] = useState<string | null>(null);
+  const [naryoConfigPipe, setNaryoConfigPipe] =
+    useState<NaryoConfigurationSnapshot | null>(null);
+  const [naryoConfigPipeErr, setNaryoConfigPipeErr] = useState<string | null>(
+    null,
+  );
 
   const hederaExplorerUrl = useMemo(
     () =>
@@ -67,6 +79,77 @@ export function DashboardClient() {
   }, []);
 
   useEffect(() => {
+    let stop = false;
+    async function pullNaryo() {
+      try {
+        const r = await fetch("/api/backend/naryo-configuration", {
+          cache: "no-store",
+        });
+        const j = (await r.json()) as NaryoConfigurationSnapshot & {
+          error?: string;
+        };
+        if (!r.ok) {
+          throw new Error(j.error || `HTTP ${r.status}`);
+        }
+        if (!stop) {
+          setNaryoConfig(j as NaryoConfigurationSnapshot);
+          setNaryoConfigErr(null);
+        }
+      } catch (e) {
+        if (!stop) {
+          setNaryoConfigErr(e instanceof Error ? e.message : String(e));
+        }
+      }
+    }
+    void pullNaryo();
+    const nid = setInterval(() => void pullNaryo(), 3000);
+    return () => {
+      stop = true;
+      clearInterval(nid);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedPipelineId) {
+      setNaryoConfigPipe(null);
+      setNaryoConfigPipeErr(null);
+      return;
+    }
+    const pipelineId = selectedPipelineId;
+    let stop = false;
+    async function pullNaryoPipe() {
+      try {
+        const r = await fetch(
+          `/api/backend/naryo-configuration?pipelineId=${encodeURIComponent(pipelineId)}`,
+          { cache: "no-store" },
+        );
+        const j = (await r.json()) as NaryoConfigurationSnapshot & {
+          error?: string;
+        };
+        if (!r.ok) {
+          throw new Error(j.error || `HTTP ${r.status}`);
+        }
+        if (!stop) {
+          setNaryoConfigPipe(j as NaryoConfigurationSnapshot);
+          setNaryoConfigPipeErr(null);
+        }
+      } catch (e) {
+        if (!stop) {
+          setNaryoConfigPipeErr(
+            e instanceof Error ? e.message : String(e),
+          );
+        }
+      }
+    }
+    void pullNaryoPipe();
+    const pid = setInterval(() => void pullNaryoPipe(), 3000);
+    return () => {
+      stop = true;
+      clearInterval(pid);
+    };
+  }, [selectedPipelineId]);
+
+  useEffect(() => {
     if (!selectedPipelineId) {
       setPipelineDetail(null);
       setPipelineDetailErr(null);
@@ -77,6 +160,7 @@ export function DashboardClient() {
     setPipelineDetail(null);
     setPipelineDetailErr(null);
     let stop = false;
+    let initial = true;
     setPipelineDetailLoading(true);
     async function pullDetail() {
       try {
@@ -92,6 +176,7 @@ export function DashboardClient() {
         }
         if (!stop) {
           setPipelineDetail(j as PipelineDetailResponse);
+          setPipelineDetailErr(null);
         }
       } catch (e) {
         if (!stop) {
@@ -100,14 +185,17 @@ export function DashboardClient() {
           );
         }
       } finally {
-        if (!stop) {
+        if (!stop && initial) {
+          initial = false;
           setPipelineDetailLoading(false);
         }
       }
     }
     void pullDetail();
+    const detailPoll = setInterval(() => void pullDetail(), 3000);
     return () => {
       stop = true;
+      clearInterval(detailPoll);
     };
   }, [selectedPipelineId]);
 
@@ -125,6 +213,10 @@ export function DashboardClient() {
       pipelineDetailLoading={pipelineDetailLoading}
       pipelineDetailErr={pipelineDetailErr}
       telemetryRows={telemetryRows}
+      naryoConfiguration={naryoConfig}
+      naryoConfigurationErr={naryoConfigErr}
+      naryoConfigurationPipeline={naryoConfigPipe}
+      naryoConfigurationPipelineErr={naryoConfigPipeErr}
     />
   );
 }

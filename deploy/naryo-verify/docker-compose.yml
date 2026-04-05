@@ -1,23 +1,7 @@
-# Minimal stack to exercise the Naryo Configuration API in isolation (Mongo + Anvil + mock HTTP + Naryo).
+# Mongo + mock HTTP + Naryo. Ethereum = Base Sepolia via EVM_RPC_URL (no local Anvil). Default public RPC may be flaky;
+# set EVM_RPC_URL in .env to Alchemy/Infura if Naryo fails at startup ("Could not subscribe to block stream").
 # See docs/NARYO_VERIFY.md for the CRUD + operation-polling walkthrough.
 services:
-  anvil:
-    image: ghcr.io/foundry-rs/foundry:stable
-    container_name: naryo-verify-anvil
-    # Image uses ENTRYPOINT ["/bin/sh","-c"]; array command breaks -c (anvil never listens). Run anvil directly.
-    entrypoint: ["anvil", "--host", "0.0.0.0", "--port", "8545"]
-    healthcheck:
-      test: ["CMD", "cast", "block-number", "--rpc-url", "http://127.0.0.1:8545"]
-      interval: 2s
-      timeout: 5s
-      retries: 20
-      start_period: 5s
-    ports:
-      # Avoid clashing with hedera-local-node (mirror web3 uses host 8545).
-      - "18545:8545"
-    networks:
-      - naryo-verify
-
   mongodb:
     image: mongo:7
     container_name: naryo-verify-mongodb
@@ -41,20 +25,21 @@ services:
       - ./mock_http_server.yaml:/data
 
   naryo-server:
-    image: ghcr.io/lf-decentralized-trust-labs/naryo:latest
+    # Override: NARYO_IMAGE=ghcr.io/lf-decentralized-trust-labs/naryo:sha-001c9a2 docker compose up -d
+    image: ${NARYO_IMAGE:-ghcr.io/lf-decentralized-trust-labs/naryo:latest}
     container_name: naryo-verify-naryo
     restart: on-failure
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
+      NARYO_DECLARATIVE_HTTP_INGEST_URL: ${NARYO_DECLARATIVE_HTTP_INGEST_URL:-http://host.docker.internal:8080}
+      EVM_RPC_URL: ${EVM_RPC_URL:-https://sepolia.base.org}
       # hedera-local-node mirror REST as seen from the Naryo container (host gateway; default port 5551).
-      HEDERA_MIRROR_URL: ${HEDERA_MIRROR_URL:-http://host.docker.internal:5551}
+      HEDERA_MIRROR_URL: ${HEDERA_MIRROR_URL:-https://testnet.mirrornode.hedera.com}
       # HCS topic id (0.0.x) for the declarative TRANSACTION filter in application.yml.
       # SOLO_HCS_TOPIC_ID is a deprecated alias if LOCAL_NODE_HCS_TOPIC_ID is unset.
       LOCAL_NODE_HCS_TOPIC_ID: ${LOCAL_NODE_HCS_TOPIC_ID:-${SOLO_HCS_TOPIC_ID:-0.0.0}}
     depends_on:
-      anvil:
-        condition: service_healthy
       mongodb:
         condition: service_started
       mock-http:

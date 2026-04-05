@@ -1,5 +1,6 @@
 import { ObservabilityRealtimeChart } from "@/components/ObservabilityRealtimeChart";
 import type {
+  NaryoConfigurationSnapshot,
   PipelineDetailResponse,
   PipelineSessionDetail,
   Summary,
@@ -26,6 +27,12 @@ export type DashboardViewProps = {
   pipelineDetailErr?: string | null;
   /** Minute-bucket series built in the browser from summary polling. */
   telemetryRows?: TelemetryChartRow[];
+  /** Live GET /observability/v1/naryo/configuration (full lists). */
+  naryoConfiguration?: NaryoConfigurationSnapshot | null;
+  naryoConfigurationErr?: string | null;
+  /** Narrowed snapshot when a pipeline row is selected (?pipelineId=). */
+  naryoConfigurationPipeline?: NaryoConfigurationSnapshot | null;
+  naryoConfigurationPipelineErr?: string | null;
 };
 
 function stateStyles(state: string) {
@@ -53,18 +60,58 @@ function formatTime(iso: string) {
   }
 }
 
-function JsonBlock({ value }: { value: unknown }) {
+function JsonBlock({
+  value,
+  maxHeightClass = "max-h-56",
+}: {
+  value: unknown;
+  maxHeightClass?: string;
+}) {
   return (
-    <pre className="max-h-56 overflow-auto rounded-lg border border-white/[0.06] bg-black/30 p-3 font-mono text-[11px] leading-relaxed text-zinc-400">
+    <pre
+      className={`${maxHeightClass} overflow-auto rounded-lg border border-white/[0.06] bg-black/30 p-3 font-mono text-[11px] leading-relaxed text-zinc-400`}
+    >
       {JSON.stringify(value, null, 2)}
     </pre>
   );
 }
 
+function naryoSnapshotCounts(s: NaryoConfigurationSnapshot | null | undefined) {
+  if (!s) return null;
+  const fc = s.filtersCount;
+  const bc = s.broadcastersCount;
+  const cc = s.broadcasterConfigurationsCount;
+  const parts: string[] = [];
+  if (typeof fc === "number") parts.push(`${fc} filter(s)`);
+  if (typeof bc === "number") parts.push(`${bc} broadcaster(s)`);
+  if (typeof cc === "number") parts.push(`${cc} HTTP config(s)`);
+  return parts.length ? parts.join(" · ") : null;
+}
+
+function naryoSnapshotHintLines(s: NaryoConfigurationSnapshot | null | undefined) {
+  if (!s) return [];
+  const raw = s.snapshotHints;
+  if (Array.isArray(raw)) {
+    return raw.filter((x): x is string => typeof x === "string");
+  }
+  return [];
+}
+
 function sessionMetadata(session: PipelineSessionDetail): Record<string, unknown> {
   const rest: Record<string, unknown> = { ...session };
   delete rest.config;
+  delete rest.naryoFilterPlan;
   return rest;
+}
+
+function formatNaryoPlanCell(p: { naryoFilterPlan?: Record<string, unknown> }): string {
+  const plan = p.naryoFilterPlan;
+  if (!plan || typeof plan !== "object") return "—";
+  if (plan.useALLFallback === true) return "ALL (no pf-* row)";
+  const name = plan.expectedNaryoFilterName;
+  if (typeof name === "string" && name) return name;
+  const key = plan.key;
+  return typeof key === "string" && key ? key : "—";
 }
 
 export function DashboardView({
@@ -80,6 +127,10 @@ export function DashboardView({
   pipelineDetailLoading = false,
   pipelineDetailErr = null,
   telemetryRows = [],
+  naryoConfiguration = null,
+  naryoConfigurationErr = null,
+  naryoConfigurationPipeline = null,
+  naryoConfigurationPipelineErr = null,
 }: DashboardViewProps) {
   const pay = data?.payments as Record<string, unknown> | undefined;
   const x402 = pay?.x402 as Record<string, unknown> | undefined;
@@ -300,6 +351,7 @@ export function DashboardView({
                       <th className="pb-3 pr-4 font-medium text-right">
                         Billed s
                       </th>
+                      <th className="pb-3 pr-4 font-medium">Naryo plan</th>
                       <th className="pb-3 font-medium">Naryo op</th>
                     </tr>
                   </thead>
@@ -366,6 +418,16 @@ export function DashboardView({
                               @ {p.rateCentsPerSecond}¢/s
                             </span>
                           </td>
+                          <td
+                            className="py-3 pr-4 font-mono text-[11px] leading-snug text-zinc-500"
+                            title={
+                              p.naryoFilterPlan
+                                ? JSON.stringify(p.naryoFilterPlan)
+                                : undefined
+                            }
+                          >
+                            {formatNaryoPlanCell(p)}
+                          </td>
                           <td className="py-3 font-mono text-xs text-zinc-500">
                             {p.lastNaryoOpId || "—"}
                           </td>
@@ -374,7 +436,7 @@ export function DashboardView({
                     ) : (
                       <tr>
                         <td
-                          colSpan={6}
+                          colSpan={7}
                           className="py-10 text-center text-sm text-zinc-500"
                         >
                           No pipelines yet. Create one via the paid REST API.
@@ -436,6 +498,34 @@ export function DashboardView({
                               value={sessionMetadata(pipelineDetail.session)}
                             />
                           </div>
+                          {pipelineDetail.session.naryoFilterPlan &&
+                          Object.keys(pipelineDetail.session.naryoFilterPlan)
+                            .length > 0 ? (
+                            <div className="mt-4">
+                              <h5 className="text-xs font-medium text-zinc-500">
+                                Naryo filter plan (from config)
+                              </h5>
+                              <p className="mt-1 text-xs text-zinc-600">
+                                What start/resume would provision: scoped plans
+                                create a filter named{" "}
+                                <code className="font-mono text-zinc-500">
+                                  pf-&#123;sessionId&#125;-hcs
+                                </code>{" "}
+                                or{" "}
+                                <code className="font-mono text-zinc-500">
+                                  -evm
+                                </code>
+                                . ALL-target pipelines only create an HTTP
+                                broadcaster (no per-pipeline filter row).
+                              </p>
+                              <div className="mt-2">
+                                <JsonBlock
+                                  value={pipelineDetail.session.naryoFilterPlan}
+                                  maxHeightClass="max-h-40"
+                                />
+                              </div>
+                            </div>
+                          ) : null}
                         </div>
                         <div>
                           <h4 className="text-xs font-medium uppercase tracking-wider text-zinc-500">
@@ -533,6 +623,58 @@ export function DashboardView({
                           </ul>
                         </div>
                       </div>
+                      {selectedPipelineId ? (
+                        <div className="col-span-full mt-2 border-t border-white/[0.06] pt-6">
+                          <h4 className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+                            Naryo Configuration (this pipeline)
+                          </h4>
+                          <p className="mt-2 text-xs text-zinc-600">
+                            Same endpoint with{" "}
+                            <code className="font-mono text-zinc-500">
+                              ?pipelineId=
+                            </code>{" "}
+                            — filters named{" "}
+                            <code className="font-mono text-zinc-500">
+                              pf-&#123;sessionId&#125;-…
+                            </code>{" "}
+                            and broadcasters whose destination path includes this
+                            session id.
+                          </p>
+                          {naryoConfigurationPipelineErr ? (
+                            <p className="mt-3 text-sm text-rose-200/90">
+                              {naryoConfigurationPipelineErr}
+                            </p>
+                          ) : null}
+                          {naryoConfigurationPipeline ? (
+                            <div className="mt-3 space-y-2">
+                              {naryoSnapshotCounts(naryoConfigurationPipeline) ? (
+                                <p className="font-mono text-xs text-zinc-500">
+                                  {naryoSnapshotCounts(naryoConfigurationPipeline)}{" "}
+                                  (after narrow)
+                                </p>
+                              ) : null}
+                              {naryoSnapshotHintLines(naryoConfigurationPipeline)
+                                .length > 0 ? (
+                                <ul className="list-inside list-disc space-y-1 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-100/95">
+                                  {naryoSnapshotHintLines(
+                                    naryoConfigurationPipeline,
+                                  ).map((line, i) => (
+                                    <li key={i}>{line}</li>
+                                  ))}
+                                </ul>
+                              ) : null}
+                              <JsonBlock
+                                value={naryoConfigurationPipeline}
+                                maxHeightClass="max-h-72"
+                              />
+                            </div>
+                          ) : !naryoConfigurationPipelineErr ? (
+                            <p className="mt-3 text-sm text-zinc-500">
+                              Loading narrowed snapshot…
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
@@ -544,8 +686,8 @@ export function DashboardView({
                 Naryo adapter
               </h2>
               <p className="mt-1 text-xs text-zinc-500">
-                Configuration API client health (mock counts until live HTTP
-                client).
+                Configuration API client health from the live HTTP adapter
+                (ensureCalls, pauseCalls, …).
               </p>
               <dl className="mt-5 space-y-3 font-mono text-sm">
                 {data?.naryo &&
@@ -566,6 +708,77 @@ export function DashboardView({
               </dl>
             </section>
           </div>
+
+          <section className="rounded-2xl border border-white/[0.07] bg-[#121218]/80 p-6 shadow-[0_0_0_1px_rgba(255,255,255,0.03)_inset]">
+            <h2 className="font-display text-lg font-medium text-zinc-100">
+              Naryo Configuration API
+            </h2>
+            <p className="mt-1 max-w-3xl text-xs leading-relaxed text-zinc-500">
+              Live read from Naryo (
+              <code className="font-mono text-zinc-400">GET /api/v1/filters</code>,{" "}
+              <code className="font-mono text-zinc-400">/broadcasters</code>,{" "}
+              <code className="font-mono text-zinc-400">
+                /broadcaster-configurations
+              </code>
+              ), plus orchestrator in-memory session state (
+              <code className="font-mono text-zinc-500">mode: http</code>).{" "}
+              <span className="text-zinc-400">
+                ALL-target pipelines have broadcasters but often no{" "}
+                <code className="font-mono text-zinc-500">pf-*</code> filter
+                rows
+              </span>
+              ; check the pipeline row &quot;Naryo plan&quot; and the detail
+              panel. When a pipeline is selected, this section can narrow to that
+              session (
+              <code className="font-mono text-zinc-500">pf-&#123;id&#125;-*</code>{" "}
+              names and matching HTTP paths).
+            </p>
+            {naryoConfigurationErr ? (
+              <p className="mt-4 text-sm text-rose-200/90">
+                {naryoConfigurationErr}
+              </p>
+            ) : null}
+            {naryoConfiguration ? (
+              <div className="mt-4 space-y-3">
+                <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 font-mono text-xs text-zinc-400">
+                  <span>
+                    mode:{" "}
+                    <span className="text-[#e8d5a3]">
+                      {String(naryoConfiguration.mode ?? "—")}
+                    </span>
+                  </span>
+                  {typeof naryoConfiguration.configurationApiBaseURL ===
+                  "string" ? (
+                    <span className="text-zinc-500">
+                      base: {naryoConfiguration.configurationApiBaseURL}
+                    </span>
+                  ) : null}
+                  {naryoSnapshotCounts(naryoConfiguration) ? (
+                    <span className="text-zinc-500">
+                      {naryoSnapshotCounts(naryoConfiguration)}
+                    </span>
+                  ) : null}
+                </div>
+                {typeof naryoConfiguration.generatedAt === "string" ? (
+                  <p className="text-xs text-zinc-600">
+                    snapshot {formatTime(naryoConfiguration.generatedAt)}
+                  </p>
+                ) : null}
+                {naryoSnapshotHintLines(naryoConfiguration).length > 0 ? (
+                  <ul className="list-inside list-disc space-y-1 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-100/95">
+                    {naryoSnapshotHintLines(naryoConfiguration).map((line, i) => (
+                      <li key={i}>{line}</li>
+                    ))}
+                  </ul>
+                ) : null}
+                <JsonBlock value={naryoConfiguration} maxHeightClass="max-h-[min(28rem,55vh)]" />
+              </div>
+            ) : !naryoConfigurationErr ? (
+              <p className="mt-4 text-sm text-zinc-500">
+                No configuration snapshot yet (waiting for first poll).
+              </p>
+            ) : null}
+          </section>
 
           <div className="grid gap-8 lg:grid-cols-2">
             <section className="rounded-2xl border border-white/[0.07] bg-[#121218]/80 p-6">

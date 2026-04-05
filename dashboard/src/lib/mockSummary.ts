@@ -1,4 +1,8 @@
-import type { PipelineDetailResponse, Summary } from "@/lib/types";
+import type {
+  NaryoConfigurationSnapshot,
+  PipelineDetailResponse,
+  Summary,
+} from "@/lib/types";
 
 /** Fixed timestamp for stable Storybook screenshots */
 const SNAPSHOT_AT = "2026-04-04T15:30:00.000Z";
@@ -124,5 +128,75 @@ export const mockPipelineDetailSess8f2a1c: PipelineDetailResponse = {
       payload: { kind: "handshake" },
       receivedAt: "2026-04-04T15:29:52.000Z",
     },
+  ],
+};
+
+/** Storybook: full Naryo Configuration API snapshot. */
+export const mockNaryoConfigurationFull: NaryoConfigurationSnapshot = {
+  mode: "http",
+  configurationApiBaseURL: "http://127.0.0.1:6060",
+  generatedAt: SNAPSHOT_AT,
+  filtersCount: 2,
+  broadcastersCount: 2,
+  broadcasterConfigurationsCount: 1,
+  filters: [
+    {
+      id: "a5605668-7a88-4e5c-b4ee-4a8417b7184d",
+      name: "declarative-topic",
+      type: "TRANSACTION",
+      nodeId: "7f3b8e1a-4d2c-4b9a-8e5f-1a2b3c4d5e6f",
+    },
+    {
+      id: "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+      name: "pf-sess-8f2a1c-hcs",
+      type: "TRANSACTION",
+      nodeId: "7f3b8e1a-4d2c-4b9a-8e5f-1a2b3c4d5e6f",
+    },
+  ],
+  broadcasters: [
+    {
+      id: "br-1",
+      configurationId: "8b7a9c2d-1e3f-4a5b-8c9d-0e1f2a3b4c5d",
+      target: {
+        type: "FILTER",
+        filterId: "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+        destinations: ["/internal/naryo/v1/events/sess-8f2a1c"],
+      },
+    },
+  ],
+  broadcasterConfigurations: [
+    { id: "8b7a9c2d-1e3f-4a5b-8c9d-0e1f2a3b4c5d", type: "HTTP" },
+  ],
+};
+
+/** Storybook: narrowed snapshot for pipeline sess-8f2a1c. */
+export const mockNaryoConfigurationPipeline: NaryoConfigurationSnapshot = {
+  mode: "http",
+  configurationApiBaseURL: "http://127.0.0.1:6060",
+  generatedAt: SNAPSHOT_AT,
+  pipelineId: "sess-8f2a1c",
+  filterNamePrefix: "pf-sess-8f2a1c-",
+  filtersCount: 2,
+  broadcastersCount: 2,
+  broadcasterConfigurationsCount: 1,
+  filters: [
+    {
+      id: "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+      name: "pf-sess-8f2a1c-hcs",
+      type: "TRANSACTION",
+    },
+  ],
+  broadcasters: [
+    {
+      id: "br-1",
+      target: {
+        type: "FILTER",
+        filterId: "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+        destinations: ["/internal/naryo/v1/events/sess-8f2a1c"],
+      },
+    },
+  ],
+  broadcasterConfigurations: [
+    { id: "8b7a9c2d-1e3f-4a5b-8c9d-0e1f2a3b4c5d", type: "HTTP" },
   ],
 };

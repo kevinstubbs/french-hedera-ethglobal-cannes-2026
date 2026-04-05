@@ -21,9 +21,9 @@ From the repository root:
 | `cd agents/trading-signal && npm test`      | Agent package unit tests only.                                                                               |
 
 
-`make test-full` / `make test-fast` print `**>>> Go: PASS`** and `**>>> Vitest: PASS**` and end with `**All tests passed**` when everything succeeds (any failure stops the recipe with a non-zero exit code).
+`make test-full` / `make test-fast` print `**>>> Go: PASS`** and `**>>> Vitest: PASS`** and end with `**All tests passed**` when everything succeeds (any failure stops the recipe with a non-zero exit code).
 
-**Reading raw `go test` lines:** each line is one package. `**ok`** means that package’s tests passed (timing on the right). `**?**` means **no test files** in that package — that is normal, not a failure. Only `**FAIL`** indicates failing tests. On narrow terminals, tabs can make columns look merged (e.g. `cmd/api` touching `[no test files]`); widen the window or rely on the Makefile summary lines above.
+**Reading raw `go test` lines:** each line is one package. `**ok`** means that package’s tests passed (timing on the right). `**?`** means **no test files** in that package — that is normal, not a failure. Only `**FAIL`** indicates failing tests. On narrow terminals, tabs can make columns look merged (e.g. `cmd/api` touching `[no test files]`); widen the window or rely on the Makefile summary lines above.
 
 CI runs Go (`./cmd/...` `./internal/...`) plus `agents/trading-signal` Vitest — see `[.github/workflows/test.yml](../.github/workflows/test.yml)`. Use `make test-fast` locally for the `-short` Go lane.
 
@@ -37,9 +37,9 @@ cd deploy/naryo-verify && docker compose up -d
 python3 verify_naryo_api.py
 ```
 
-The stack runs **Anvil** (Ethereum) in Compose and points **Hedera** at a **local mirror REST** URL on the host (`HEDERA_MIRROR_URL`, default `http://host.docker.internal:5551`), matching **[hedera-local-node](../hedera-local-node/README.md)** mirror port **5551** when that stack runs on the host. See [NARYO_VERIFY.md](./NARYO_VERIFY.md) for ports and env vars.
+The stack indexes **Base Sepolia** via **`EVM_RPC_URL`** (default `https://sepolia.base.org` in compose; no bundled Anvil) and points **Hedera** at a **local mirror REST** URL on the host (`HEDERA_MIRROR_URL`, default `http://host.docker.internal:5551`), matching **[hedera-local-node](../hedera-local-node/README.md)** mirror port **5551** when that stack runs on the host. See [NARYO_VERIFY.md](./NARYO_VERIFY.md) for ports and env vars.
 
-See [NARYO_VERIFY.md](./NARYO_VERIFY.md) for scope (Ethereum baseline `PUT` cycle, broadcaster-config + `ALL` broadcasters; filter `POST` skipped on the tested image; declarative Hedera filter in `application.yml`).
+See [NARYO_VERIFY.md](./NARYO_VERIFY.md) for scope (Base Sepolia Ethereum baseline `PUT` cycle, broadcaster-config + `ALL` broadcasters; filter `POST` skipped on the tested image; declarative Hedera filter in `application.yml`).
 
 **Production intent:** Naryo HTTP broadcasters should target **this platform’s API only**; the API stores events and optionally forwards to per-pipeline agent webhooks, while agents without webhooks use **pull** APIs for history. See [PIPELINE_EVENT_ROUTING.md](./PIPELINE_EVENT_ROUTING.md).
 
@@ -67,10 +67,10 @@ PORT=3001 go run ./cmd/api
 | `X402_PAY_TO`          | Recipient address for paid routes.                                                                                          |
 | `X402_NETWORK`         | CAIP-2 network (default `eip155:84532`).                                                                                    |
 | `X402_PRICE`           | Price for **start** only (default `**$0.01`**).                                                                             |
-| `NARYO_INGEST_SECRET`  | Shared secret for `POST /internal/naryo/v1/events` (header `**X-Naryo-Webhook-Secret**`). If unset, ingest returns **503**. |
+| `NARYO_INGEST_SECRET`  | Shared secret for `POST /internal/naryo/v1/events` (header `**X-Naryo-Webhook-Secret`**). If unset, ingest returns **503**. |
 
 
-Only `**POST /v1/pipelines/{id}/start`** is x402-gated and requires a valid `**PAYMENT-SIGNATURE**`. Other `/v1` mutations use the prepaid ledger (no x402 on each call).
+Only `**POST /v1/pipelines/{id}/start`** is x402-gated and requires a valid `**PAYMENT-SIGNATURE`**. Other `/v1` mutations use the prepaid ledger (no x402 on each call).
 
 ### Prepaid balance (Hedera-oriented MVP)
 
@@ -80,7 +80,7 @@ While a pipeline is **running** with an active payment stream, the server:
 
 1. Increments `**billedSeconds`** every billing tick (the API runs `**BillingTick` once per second**).
 2. Accrues usage with **second precision** (`rateUnitsPerMinute` is spread across seconds), then debits the ledger **every `PREPAID_DEBIT_INTERVAL_SECONDS`** (default **300** ≈ five minutes) in one charge.
-3. Emits `**billing_summary`** on HCS (when configured) every `**HEDERA_SUMMARY_WINDOW_MINUTES**` (5–15, default **10**) for batched audit.
+3. Emits `**billing_summary`** on HCS (when configured) every `**HEDERA_SUMMARY_WINDOW_MINUTES`** (5–15, default **10**) for batched audit.
 4. If a debit fails for insufficient balance: **one grace retry** after **60 seconds**; then the pipeline is **auto-paused** (Naryo egress pause best-effort) and `**pipeline_paused`** is logged with reason `insufficient_balance`.
 
 
@@ -96,7 +96,7 @@ While a pipeline is **running** with an active payment stream, the server:
 | `HEDERA_OPERATOR_KEY`            | Operator private key (DER or hex string).                                                                                                                                  |
 
 
-**Local network (hedera-local-node):** use the relay operator from `**hedera-local-node/.env`** — set `HEDERA_OPERATOR_ID` to `**RELAY_OPERATOR_ID_MAIN**` (typically `0.0.2`) and `HEDERA_OPERATOR_KEY` to `**RELAY_OPERATOR_KEY_MAIN**` (DER hex string). Consensus node account `**0.0.3**` in that file is the **node** id for gRPC maps, not the signing operator.
+**Local network (hedera-local-node):** use the relay operator from `**hedera-local-node/.env`** — set `HEDERA_OPERATOR_ID` to `**RELAY_OPERATOR_ID_MAIN`** (typically `0.0.2`) and `HEDERA_OPERATOR_KEY` to `**RELAY_OPERATOR_KEY_MAIN**` (DER hex string). Consensus node account `**0.0.3**` in that file is the **node** id for gRPC maps, not the signing operator.
 | `HEDERA_SERVICE_ACCOUNT_ID` | Expected **recipient** of deposit transfers for `VerifyTopupTx`. |
 | `HEDERA_AUDIT_TOPIC_ID` | HCS topic id; envelope JSON is submitted asynchronously (best-effort). |
 | `HEDERA_SUMMARY_WINDOW_MINUTES` | Billing summary batch window (clamped **5–15**). |
@@ -118,7 +118,8 @@ PREPAID_DEV_AUTO_CREDIT_UNITS=100000 go run ./cmd/api
 | Method | Path                                 | Notes                                                                                                                                                                       |
 | ------ | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET`  | `/healthz`                           | Liveness; not payment-gated.                                                                                                                                                |
-| `GET`  | `/observability/v1/summary`          | JSON snapshot for the dashboard (sessions, activity, Naryo mock stats, payment summary). **Not authenticated**—do not expose on untrusted networks without a proxy or auth. |
+| `GET`  | `/observability/v1/summary`          | JSON snapshot for the dashboard (sessions, activity, Naryo HTTP client stats, payment summary). **Not authenticated**—do not expose on untrusted networks without a proxy or auth. |
+| `GET`  | `/observability/v1/naryo/configuration` | Live **read** from Naryo’s Configuration API (`filters`, `broadcasters`, `broadcaster-configurations`); requires the same Naryo env as the API process (`mode: http`). Optional query **`pipelineId={sessionId}`** narrows to `pf-{sessionId}-*` filter names and matching HTTP destinations. Same exposure caveats as summary. |
 | `GET`  | `/v1/pipelines/{id}/status`          | Session status (not behind x402 in the current wiring).                                                                                                                     |
 | `POST` | `/v1/pipelines`                      | Create pipeline (not x402-gated).                                                                                                                                           |
 | `POST` | `/v1/pipelines/{id}/start`           | **x402** (PAYMENT-SIGNATURE).                                                                                                                                               |
@@ -155,7 +156,7 @@ npm install
 npm run dev
 ```
 
-Open **[http://localhost:3000](http://localhost:3000)**. The UI polls the Go API via a Next.js route handler (no browser CORS to the API). Use the **Hedera** tab to embed the **Hedera Local Node** mirror explorer in an iframe when you run a local network.
+Open **[http://localhost:3000](http://localhost:3000)**. The UI polls the Go API via a Next.js route handler (no browser CORS to the API). The **Naryo Configuration API** section shows live **`GET /observability/v1/naryo/configuration`** JSON (filters, broadcasters, configs); selecting a pipeline adds a narrowed view for that session. Use the **Hedera** tab to embed the **Hedera Local Node** mirror explorer in an iframe when you run a local network.
 
 ### Local Hedera (hedera-local-node)
 

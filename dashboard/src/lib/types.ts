@@ -7,6 +7,8 @@ export type PipelineRow = {
   rateCentsPerSecond: number;
   lastNaryoOpId?: string;
   config?: Record<string, unknown>;
+  /** From observability: how session config maps to Naryo provision (no live Naryo call). */
+  naryoFilterPlan?: Record<string, unknown>;
 };
 
 /** Full session from observability / status (includes merged reconfigure patch). */
@@ -18,6 +20,7 @@ export type PipelineSessionDetail = {
   billedSeconds: number;
   rateCentsPerSecond: number;
   lastNaryoOpId?: string;
+  naryoFilterPlan?: Record<string, unknown>;
   config?: Record<string, unknown>;
   rateUnitsPerMinute?: number;
   chargedUnits?: number;
@@ -54,3 +57,6 @@ export type Summary = {
   naryo: Record<string, unknown>;
   payments: Record<string, unknown>;
 };
+
+/** GET /observability/v1/naryo/configuration (optional ?pipelineId=). */
+export type NaryoConfigurationSnapshot = Record<string, unknown>;

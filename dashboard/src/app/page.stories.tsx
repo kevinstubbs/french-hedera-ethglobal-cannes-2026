@@ -2,6 +2,8 @@ import type { Meta, StoryObj } from "@storybook/nextjs-vite";
 import { useMemo, useState } from "react";
 import { DashboardView, type MainTab } from "@/components/DashboardView";
 import {
+  mockNaryoConfigurationFull,
+  mockNaryoConfigurationPipeline,
   mockPipelineDetailSess8f2a1c,
   mockSummaryLoaded,
 } from "@/lib/mockSummary";
@@ -43,6 +45,20 @@ function HomePagePreview(props: {
   const telemetryRows =
     props.telemetryRows ??
     (props.data ? mockTelemetryChartRows : []);
+  const naryoPipe =
+    selectedId === "sess-8f2a1c"
+      ? mockNaryoConfigurationPipeline
+      : selectedId
+        ? {
+            mode: "http",
+            generatedAt: mockSummaryLoaded.generatedAt,
+            pipelineId: selectedId,
+            filterNamePrefix: `pf-${selectedId}-`,
+            filters: [],
+            broadcasters: [],
+            broadcasterConfigurations: [],
+          }
+        : null;
   return (
     <div className="relative min-h-screen overflow-hidden">
       <div
@@ -69,6 +85,10 @@ function HomePagePreview(props: {
           pipelineDetailLoading={false}
           pipelineDetailErr={null}
           telemetryRows={telemetryRows}
+          naryoConfiguration={props.data ? mockNaryoConfigurationFull : null}
+          naryoConfigurationErr={null}
+          naryoConfigurationPipeline={props.data ? naryoPipe : null}
+          naryoConfigurationPipelineErr={null}
         />
       </div>
     </div>

@@ -1,5 +1,6 @@
-# Baseline follows Naryo upstream examples:
-# - Ethereum: examples/quickstart (Anvil on the compose network)
+# Baseline:
+# - Ethereum: Base Sepolia (84532) via EVM_RPC_URL (docker-compose; default https://sepolia.base.org). No bundled Anvil.
+#   If Naryo fails at startup ("Could not subscribe to block stream"), set EVM_RPC_URL to Alchemy/Infura/etc. in .env.
 # - Hedera: examples/hedera-quickstart (mirror REST only). Set HEDERA_MIRROR_URL in compose/.env, e.g.
 #     Local:  http://host.docker.internal:5551 (hedera-local-node mirror on host)
 #     Testnet: https://testnet.mirrornode.hedera.com
@@ -8,12 +9,13 @@
 naryo:
   nodes:
     - id: eadc75b2-4217-4018-95af-f67c13058976
-      name: anvil
+      name: base-sepolia
       type: ETHEREUM
       connection:
         type: HTTP
         endpoint:
-          url: http://anvil:8545
+          # Injected by docker-compose (.env). Do not use ${VAR:https://...} defaults in YAML — Spring treats ':' as the delimiter.
+          url: ${EVM_RPC_URL}
       interaction:
         strategy: BLOCK_BASED
         mode: ETHEREUM_RPC
@@ -44,7 +46,16 @@ naryo:
         confirmationBlocks: 0
 
   broadcasting:
-    configuration: []
+    # Declarative HTTP destination so Mongo has a broadcaster-configuration row at boot. The Configuration API
+    # POST for new configs can async-NPE on some images; the Go API then reuses this row when endpoint.url matches
+    # NARYO_PLATFORM_INGEST_URL (default http://host.docker.internal:8080 — set NARYO_DECLARATIVE_HTTP_INGEST_URL in compose .env).
+    configuration:
+      - id: 8b7a9c2d-1e3f-4a5b-8c9d-0e1f2a3b4c5d
+        type: HTTP
+        endpoint:
+          url: ${NARYO_DECLARATIVE_HTTP_INGEST_URL}
+        cache:
+          expirationTime: 5m
     broadcasters: []
 
   # Declarative Hedera filter (hedera-quickstart shape). Topic id at runtime via env (see deploy/naryo-verify/.env.example).

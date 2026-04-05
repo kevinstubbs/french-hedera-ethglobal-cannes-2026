@@ -290,7 +290,7 @@ func (s *Service) Start(ctx context.Context, id string) error {
 		if v.State != StateCreated && v.State != StatePaused {
 			return false, fmt.Errorf("%w: start from %s", ErrInvalidTransition, v.State)
 		}
-		op, err := s.naryo.EnsurePipeline(ctx, id)
+		op, err := s.naryo.EnsurePipeline(ctx, naryo.EnsurePipelineArgs{SessionID: id, Config: v.Config})
 		if err != nil {
 			return false, err
 		}
@@ -389,7 +389,7 @@ func (s *Service) Resume(ctx context.Context, id string) error {
 		return err
 	}
 
-	err = s.naryo.ResumeEgress(ctx, id)
+	err = s.naryo.ResumeEgress(ctx, naryo.EnsurePipelineArgs{SessionID: id, Config: sess.Config})
 	if err != nil {
 		return err
 	}
@@ -415,6 +415,7 @@ func (s *Service) Resume(ctx context.Context, id string) error {
 }
 
 // Reconfigure merges patch into the session config map (shallow per-key) and emits HCS.
+// It does not call Naryo immediately; updated eventSubscriptions apply on the next Start or Resume (EnsurePipeline).
 func (s *Service) Reconfigure(ctx context.Context, id string, patch map[string]any) error {
 	if len(patch) == 0 {
 		_, err := s.store.Get(id)
@@ -435,7 +436,7 @@ func (s *Service) Reconfigure(ctx context.Context, id string, patch map[string]a
 			return err
 		}
 	}
-	s.recordActivity("pipeline_reconfigured", id, map[string]any{"phase": 1})
+	s.recordActivity("pipeline_reconfigured", id, map[string]any{"phase": 1, "naryoTouched": false})
 	if s.hcs != nil {
 		s.hcs.PipelineReconfigured(ctx, id, 1)
 	}

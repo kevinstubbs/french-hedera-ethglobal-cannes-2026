@@ -4,19 +4,21 @@ This proves **CRUD** plus **`GET /api/v1/operations/{id}`** polling for:
 
 - **Broadcaster configurations** — create, update, delete.
 - **Broadcasters** — create, update, delete with target type **`ALL`** (see below).
-- **Nodes** — `PUT` rename + restore on the **Ethereum (Anvil)** baseline node (`prevItemHash`, async op polling). `POST /api/v1/nodes` is not used here (extra nodes need a matching store configuration). **Hedera (local mirror)** is also defined in `application.yml` for multi-chain baseline (intended for **[hedera-local-node](../hedera-local-node/README.md)** on the host).
+- **Nodes** — `PUT` rename + restore on the **Ethereum (Base Sepolia)** baseline node (`prevItemHash`, async op polling). `POST /api/v1/nodes` is not used here (extra nodes need a matching store configuration). **Hedera (local mirror)** is also defined in `application.yml` for multi-chain baseline (intended for **[hedera-local-node](../hedera-local-node/README.md)** on the host).
 
 The script runs **broadcasters before node `PUT`s**: on the tested image, doing node updates first can leave the revision worker in a bad state and cause broadcaster-configuration operations to fail with `NullPointerException`.
 
 `deploy/naryo-verify/verify_naryo_api.py` is the single automated check (no ad-hoc curls required for normal use).
 
+To **inspect filters and broadcasters** on a running Naryo instance, you can call the Configuration API directly, e.g. `curl -sS "http://127.0.0.1:6060/api/v1/filters" | jq` and `curl -sS "http://127.0.0.1:6060/api/v1/broadcasters" | jq` (port as mapped in compose). When the **Go platform API** is running with real Naryo env, **`GET http://<api-host>:8080/observability/v1/naryo/configuration`** proxies the same three list endpoints (`filters`, `broadcasters`, `broadcaster-configurations`) into one JSON payload; add **`?pipelineId=<sessionId>`** to narrow pipeline-scoped rows.
+
 ## Filters
 
-`POST /api/v1/filters` (and several event-filter shapes we tried) return **500** on `ghcr.io/lf-decentralized-trust-labs/naryo:latest` in this environment, so the script does **not** assert filter CRUD. Broadcaster verification uses **`ALL`** destinations instead of `FILTER` + `filterId`. Revisit when upgrading Naryo or pointing at a stack where filter creation succeeds.
+`POST /api/v1/filters` (and several event-filter shapes we tried) return **500** on `ghcr.io/lf-decentralized-trust-labs/naryo:latest` in this environment, so the script does **not** assert filter CRUD. Broadcaster verification uses **`ALL`** destinations instead of `FILTER` + `filterId`. The **Go platform API** creates a per-pipeline filter plus a **`FILTER`** broadcaster when `POST /filters` and the async operation succeed. Some images report **`UNEXPECTED_ERROR` / `RuntimeException: onAfterApply hook error`** after the operation is enqueued; with **`NARYO_ALLOW_ALL_BROADCASTER_FALLBACK=true`** (default), the API **falls back** to an **ALL-target** HTTP broadcaster so **`POST .../start`** can still succeed (check API logs for `falling back to ALL-target broadcaster`). If you need strict FILTER-only delivery, set **`NARYO_ALLOW_ALL_BROADCASTER_FALLBACK=false`**, upgrade **`NARYO_IMAGE`**, or use a Naryo stack where filter apply hooks succeed. Revisit when upgrading Naryo.
 
 ## Baseline chains (Ethereum + Hedera)
 
-Ethereum follows the upstream **quickstart** layout ([`examples/quickstart/application.yml`](https://github.com/LF-Decentralized-Trust-labs/Naryo/blob/main/examples/quickstart/application.yml)): **Anvil** in Docker at `http://anvil:8545`, so Naryo does not depend on public RPC rate limits or `eth_newBlockFilter` support on third-party endpoints.
+Ethereum indexes **Base Sepolia** (chain id **84532**). The JSON-RPC URL is **`EVM_RPC_URL`** (see `deploy/naryo-verify/docker-compose.yml`, default `https://sepolia.base.org`; **no local Anvil** in this compose file). If Naryo fails at startup with **Could not subscribe to block stream**, set **`EVM_RPC_URL`** in `.env` to Alchemy, Infura, or similar. See also [Web3j: Previously installed filter has not been found](#web3j-previously-installed-filter-has-not-been-found).
 
 Hedera follows **hedera-quickstart** ([`examples/hedera-quickstart/application.yml`](https://github.com/LF-Decentralized-Trust-labs/Naryo/blob/main/examples/hedera-quickstart/application.yml)): a **local mirror REST** URL reachable from the Naryo container, defaulting to `http://host.docker.internal:5551` (same port as **[hedera-local-node](../hedera-local-node/README.md)** mirror REST on the host). Adjust `HEDERA_MIRROR_URL` if your mirror listens elsewhere.
 
@@ -25,6 +27,24 @@ Set **`LOCAL_NODE_HCS_TOPIC_ID`** (or legacy **`SOLO_HCS_TOPIC_ID`**) for the de
 To generate **live HCS messages** on that topic for demos, run **`go run ./cmd/hcs-demo-activity`** from the repo root (see [RUNBOOK.md](./RUNBOOK.md) § Demo and e2e scripts).
 
 Public Hedera testnet can still hit mirror/schema mismatches (e.g. newer tx types) on some Naryo builds; **hedera-local-node** on the host is the supported path for this stack.
+
+## Web3j: `Previously installed filter has not been found`
+
+Naryo’s **Ethereum** path uses **web3j**, which creates JSON-RPC **filters** (e.g. block or log filters via `eth_newBlockFilter` / related calls) and polls them. Logs like:
+
+```text
+WARN ... org.web3j.protocol.core.filters.Filter : Previously installed filter has not been found, trying to re-install. Filter id: ...
+```
+
+mean the RPC server **no longer has that filter id**. That is common when:
+
+- The URL is **load-balanced** across nodes that do not share filter state.
+- A **public / free** endpoint **drops** or **expires** filters quickly.
+- The provider **does not reliably implement** long-lived filters.
+
+Web3j then **creates a new filter** and continues; indexing may still work, but the warnings are noisy and can add load. If the control plane gets **`connection reset`** or **5xx** while talking to Naryo’s Configuration API, the JVM may be struggling (many reinstalls, OOM, or crashes) — check `docker logs` for the Naryo container.
+
+**What to do:** Point **`EVM_RPC_URL`** at a **stable** endpoint that supports filter polling for your chain (Alchemy, Infura, QuickNode, etc., on a paid or filter-capable tier if needed). A **single** JSON-RPC backend avoids filter ids disappearing across load-balanced public gateways.
 
 ## Verifying Naryo is “subscribed” to your HCS topic (e.g. `0.0.1048`)
 
@@ -119,7 +139,6 @@ Expect a final `OK:` line from the script (node checks always; broadcaster CRUD 
 | Host | Service |
 |------|---------|
 | 6060 | Naryo Configuration API (`6060` → container `8060`) |
-| 18545 | Anvil JSON-RPC on host (container still `anvil:8545` inside compose; 8545 is often used by hedera-local-node web3) |
 | 7070 | Mock HTTP destination (Mockoon) |
 | 27017 | MongoDB (optional; for debugging) |
 

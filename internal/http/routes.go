@@ -23,5 +23,7 @@ func NewMux(api *API) *http.ServeMux {
 
 // RegisterInternalRoutes attaches internal routes that are not behind x402 (e.g. Naryo webhooks).
 func RegisterInternalRoutes(m *http.ServeMux, api *API) {
+	// Session in path: Naryo HTTP broadcaster destination per pipeline (native JSON body).
+	m.HandleFunc("POST /internal/naryo/v1/events/{sessionId}", api.PostNaryoEventSession)
 	m.HandleFunc("POST /internal/naryo/v1/events", api.PostNaryoEvent)
 }

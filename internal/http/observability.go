@@ -1,18 +1,23 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
+	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/naryo"
 	"github.com/french-hedera-ethglobal-cannes2026/submission/internal/pipeline"
 )
 
 // ObservabilityDeps are wired in main (not payment-gated).
 type ObservabilityDeps struct {
 	Svc   *pipeline.Service
-	Naryo interface{ Stats() map[string]any }
+	Naryo naryo.Client
 }
 
 // ObservabilitySummary serves GET /observability/v1/summary
@@ -39,7 +44,7 @@ func ObservabilitySummary(deps *ObservabilityDeps) http.HandlerFunc {
 			"api": map[string]any{
 				"status": "ok",
 			},
-			"pipelines": sessions,
+			"pipelines": pipelineSessionMapsForObservability(sessions),
 			"activity":  activity,
 			"naryo":     naryo,
 			"payments":  payments,
@@ -71,8 +76,8 @@ func ObservabilityPipelineDetail(deps *ObservabilityDeps) http.HandlerFunc {
 			return
 		}
 		payload := map[string]any{
-			"session":         sess,
-			"recentActivity":  deps.Svc.ActivityForSession(id, 50),
+			"session":           sessionMapWithNaryoFilterPlan(sess),
+			"recentActivity":    deps.Svc.ActivityForSession(id, 50),
 			"recentNaryoEvents": []any{},
 		}
 		if sess.AgentID != "" {
@@ -107,13 +112,13 @@ func summarizePayments(svc *pipeline.Service, sessions []pipeline.Session, activ
 			"note": "Only POST /v1/pipelines/{id}/start uses x402 (PAYMENT-SIGNATURE); other control-plane mutations use prepaid metering.",
 		},
 		"prepaid": map[string]any{
-			"note":              "Off-chain prepaid units per agent; top up via POST /v1/agents/{agentId}/topup/x402 or .../deposit.",
+			"note":                "Off-chain prepaid units per agent; top up via POST /v1/agents/{agentId}/topup/x402 or .../deposit.",
 			"balanceUnitsByAgent": prepaidByAgent,
 		},
-		"runningPipelines":       runningPaid,
-		"streamsActive":          streamOn,
-		"estimatedBilledCents":   estCents,
-		"recentPaymentEvents": countTypes(activity, []string{"payment_stream", "pipeline_created", "pipeline_started", "agent_top_up"}),
+		"runningPipelines":     runningPaid,
+		"streamsActive":        streamOn,
+		"estimatedBilledCents": estCents,
+		"recentPaymentEvents":  countTypes(activity, []string{"payment_stream", "pipeline_created", "pipeline_started", "agent_top_up"}),
 	}
 }
 
@@ -129,4 +134,177 @@ func countTypes(activity []pipeline.ActivityEntry, types []string) int {
 		}
 	}
 	return n
+}
+
+// ObservabilityNaryoConfiguration serves GET /observability/v1/naryo/configuration
+// (live read from Naryo’s Configuration API: filters, broadcasters, broadcaster-configurations).
+// Optional query: pipelineId={sessionId} narrows filters whose names start with pf-{sessionId}- and
+// broadcasters whose HTTP destination path contains that session id.
+func ObservabilityNaryoConfiguration(deps *ObservabilityDeps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if deps.Naryo == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "naryo client not configured"})
+			return
+		}
+		ctx := r.Context()
+		if _, ok := ctx.Deadline(); !ok {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+		}
+		snap, err := deps.Naryo.ConfigurationSnapshot(ctx)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		if pid := strings.TrimSpace(r.URL.Query().Get("pipelineId")); pid != "" {
+			snap = narrowNaryoSnapshotForPipeline(snap, pid)
+		}
+		snap["generatedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(snap)
+	}
+}
+
+func narrowNaryoSnapshotForPipeline(s map[string]any, pipelineID string) map[string]any {
+	prefix := "pf-" + pipelineID + "-"
+	destNeedle := "/" + url.PathEscape(pipelineID)
+	out := make(map[string]any, len(s)+4)
+	for k, v := range s {
+		switch k {
+		case "orchestratorSessionsCount":
+			// Recomputed when orchestratorSessions is narrowed.
+			continue
+		case "filters":
+			out[k] = filterSnapshotFilters(v, prefix)
+		case "broadcasters":
+			out[k] = filterSnapshotBroadcasters(v, destNeedle)
+		case "orchestratorSessions":
+			f := filterOrchestratorSessionsForPipeline(v, pipelineID)
+			out[k] = f
+			out["orchestratorSessionsCount"] = len(f)
+		default:
+			out[k] = v
+		}
+	}
+	out["pipelineId"] = pipelineID
+	out["filterNamePrefix"] = prefix
+	out["note"] = "Narrowed filters by name prefix; broadcasters by destination path containing encoded session segment; orchestrator sessions to this pipeline id only."
+	return out
+}
+
+func filterOrchestratorSessionsForPipeline(v any, sessionID string) []any {
+	list, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	var out []any
+	for _, it := range list {
+		m, ok := it.(map[string]any)
+		if !ok {
+			continue
+		}
+		sid, _ := m["sessionId"].(string)
+		if sid == sessionID {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func filterSnapshotFilters(v any, namePrefix string) any {
+	list, ok := v.([]any)
+	if !ok {
+		return v
+	}
+	var out []any
+	for _, it := range list {
+		m, ok := it.(map[string]any)
+		if !ok {
+			continue
+		}
+		n, _ := m["name"].(string)
+		if strings.HasPrefix(n, namePrefix) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func filterSnapshotBroadcasters(v any, destNeedle string) any {
+	list, ok := v.([]any)
+	if !ok {
+		return v
+	}
+	var out []any
+	for _, it := range list {
+		m, ok := it.(map[string]any)
+		if !ok {
+			continue
+		}
+		if broadcasterDestinationsContain(m, destNeedle) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func broadcasterDestinationsContain(row map[string]any, needle string) bool {
+	tgt, _ := row["target"].(map[string]any)
+	if tgt == nil {
+		return false
+	}
+	dests, _ := tgt["destinations"].([]any)
+	for _, d := range dests {
+		s := destinationStringForObs(d)
+		if strings.Contains(s, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func destinationStringForObs(d any) string {
+	switch x := d.(type) {
+	case string:
+		return x
+	case map[string]any:
+		if v, ok := x["value"].(string); ok {
+			return v
+		}
+		return fmt.Sprint(x)
+	default:
+		return fmt.Sprint(d)
+	}
+}
+
+func sessionMapWithNaryoFilterPlan(s pipeline.Session) map[string]any {
+	b, err := json.Marshal(s)
+	if err != nil {
+		return map[string]any{
+			"id":              s.ID,
+			"naryoFilterPlan": naryo.DescribePipelineFilterPlanForSession(s.ID, s.Config),
+		}
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return map[string]any{
+			"id":              s.ID,
+			"naryoFilterPlan": naryo.DescribePipelineFilterPlanForSession(s.ID, s.Config),
+		}
+	}
+	m["naryoFilterPlan"] = naryo.DescribePipelineFilterPlanForSession(s.ID, s.Config)
+	return m
+}
+
+func pipelineSessionMapsForObservability(sessions []pipeline.Session) []map[string]any {
+	out := make([]map[string]any, 0, len(sessions))
+	for _, s := range sessions {
+		out = append(out, sessionMapWithNaryoFilterPlan(s))
+	}
+	return out
 }
